@@ -1,0 +1,12 @@
+{
+    "venvPath": "/Users/dankmagician/Documents/New project/ondc-super-seller/backend",
+    "venv": "venv",
+    "executionEnvironments": [
+        {
+            "root": "."
+        }
+    ],
+    "extraPaths": [
+        "."
+    ]
+}

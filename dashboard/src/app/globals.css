@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+:root,
+[data-theme="dark"] {
+  --bg-primary: #0d1117;
+  --bg-gradient-1: rgba(88, 166, 255, 0.08);
+  --bg-gradient-2: rgba(247, 129, 102, 0.08);
+  --card-bg: rgba(22, 27, 34, 0.8);
+  --card-hover: rgba(255, 255, 255, 0.05);
+  --border: rgba(255, 255, 255, 0.05);
+  --text-primary: #ffffff;
+  --text-secondary: #c9d1d9;
+  --text-muted: #6b7280;
+  --input-bg: rgba(0, 0, 0, 0.4);
+  --input-border: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="light"] {
+  --bg-primary: #f8fafc;
+  --bg-gradient-1: rgba(59, 130, 246, 0.06);
+  --bg-gradient-2: rgba(244, 114, 82, 0.06);
+  --card-bg: rgba(255, 255, 255, 0.9);
+  --card-hover: rgba(0, 0, 0, 0.03);
+  --border: rgba(0, 0, 0, 0.08);
+  --text-primary: #1e293b;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --input-bg: rgba(241, 245, 249, 1);
+  --input-border: rgba(0, 0, 0, 0.1);
+}
+
+@layer base {
+  body {
+    background-color: var(--bg-primary);
+    color: var(--text-secondary);
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background-image: radial-gradient(circle at 15% 50%, var(--bg-gradient-1), transparent 25%), radial-gradient(circle at 85% 30%, var(--bg-gradient-2), transparent 25%);
+    background-attachment: fixed;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+}

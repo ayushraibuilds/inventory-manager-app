@@ -1,0 +1,9 @@
+{
+  "source_directories": [
+    "/Users/dankmagician/Documents/New project/ondc-super-seller/backend"
+  ],
+  "search_path": [
+    "/Users/dankmagician/Documents/New project/ondc-super-seller/backend/venv/lib/python3.14/site-packages",
+    "/Users/dankmagician/Documents/New project/ondc-super-seller/backend"
+  ]
+}
