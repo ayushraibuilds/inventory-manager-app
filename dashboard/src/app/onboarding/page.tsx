@@ -16,7 +16,7 @@ const STEPS = [
 ];
 
 export default function OnboardingPage() {
-    const { sellerId, isLoading } = useAuth();
+    const { sellerId, token, isLoading } = useAuth();
     const router = useRouter();
     const activeSellerId = sellerId || "";
 
@@ -40,7 +40,11 @@ export default function OnboardingPage() {
         try {
             const res = await fetch(`${API_URL}/api/seller/${encodeURIComponent(activeSellerId)}/profile`, {
                 method: "PUT",
-                headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-API-Key": API_KEY,
+                    "Authorization": `Bearer ${token}`
+                },
                 body: JSON.stringify({ store_name: storeName.trim(), address: address.trim(), gst_number: gst.trim() }),
             });
             if (res.ok) {
@@ -57,7 +61,11 @@ export default function OnboardingPage() {
         try {
             const res = await fetch(`${API_URL}/api/catalog/item`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-API-Key": API_KEY,
+                    "Authorization": `Bearer ${token}`
+                },
                 body: JSON.stringify({
                     seller_id: activeSellerId,
                     name: productName.trim(),
@@ -97,8 +105,8 @@ export default function OnboardingPage() {
                         <div key={i} className="flex items-center flex-1 gap-2">
                             <div
                                 className={`flex items-center justify-center w-8 h-8 rounded-full border-2 transition-all ${i < step ? "bg-green-500 border-green-500 text-white" :
-                                        i === step ? "border-cyan-400 text-cyan-400" :
-                                            "border-[var(--border)] text-[var(--text-muted)]"
+                                    i === step ? "border-cyan-400 text-cyan-400" :
+                                        "border-[var(--border)] text-[var(--text-muted)]"
                                     }`}
                             >
                                 {i < step ? <Check className="w-4 h-4" /> : <s.icon className="w-4 h-4" />}

@@ -3,10 +3,12 @@ uvicorn
 langgraph
 langchain-core
 pydantic
-langchain-ollama
+langchain-groq
 python-dotenv
 twilio
 slowapi
 bcrypt
 python-jose[cryptography]
 pytest
+supabase
+requests

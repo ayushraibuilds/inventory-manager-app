@@ -29,39 +29,22 @@ logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
 from agent import process_whatsapp_message
 from db import (
-    init_db, get_all_catalogs, get_catalog, save_catalog,
+    get_all_catalogs, get_catalog, save_catalog,
     get_all_seller_ids, log_activity, get_activity_logs,
     save_seller_profile, get_seller_profile,
     create_order, get_orders, update_order_status,
-    create_user, get_user_by_email
+    get_seller_id_by_phone
 )
-import bcrypt as _bcrypt
-from jose import jwt, JWTError
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # --- Auth helpers ---
 API_KEY = os.getenv("API_KEY", "")
-JWT_SECRET = os.getenv("JWT_SECRET", "super-secret-demo-jwt-key-change-me")
-JWT_ALGORITHM = "HS256"
+security = HTTPBearer(auto_error=False)
 
-def hash_password(password: str) -> str:
-    return _bcrypt.hashpw(password.encode("utf-8"), _bcrypt.gensalt()).decode("utf-8")
-
-def verify_password(password: str, hashed: str) -> bool:
-    return _bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
-
-async def get_current_seller(authorization: str = Header(default="")) -> str:
-    """Dependency to extract seller_id from JWT token."""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid token")
-    token = authorization.split(" ")[1]
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        seller_id = payload.get("sub")
-        if not seller_id:
-            raise HTTPException(status_code=401, detail="Invalid token payload")
-        return seller_id
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Token verification failed")
+async def get_jwt_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[str]:
+    if credentials:
+        return credentials.credentials
+    return None
 
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
@@ -201,7 +184,6 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Modern lifespan handler replacing deprecated @app.on_event."""
-    init_db()
     task = asyncio.create_task(check_low_stock_alerts())
     yield
     task.cancel()
@@ -212,20 +194,17 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3005"],
+    allow_origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3005", "http://127.0.0.1:3000", "http://192.168.1.34:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-def on_startup():
-    init_db()
-
 # --- Webhook with WhatsApp reply ---
 @app.post("/whatsapp-webhook")
 @limiter.limit("30/minute")
 async def whatsapp_webhook(request: Request):
+    token = None
     """
     Webhook to receive incoming WhatsApp messages.
     Processes the message through the AI agent and sends a reply.
@@ -248,25 +227,60 @@ async def whatsapp_webhook(request: Request):
         except Exception:
             seller_id = "unknown_seller"
             raw_message = ""
+            
+    # --- Phase 2: Voice Note Interception ---
+    try:
+        num_media = int(form_dict.get("NumMedia", 0))
+        if num_media > 0:
+            content_type = form_dict.get("MediaContentType0", "")
+            if content_type.startswith("audio/"):
+                media_url = form_dict.get("MediaUrl0")
+                if media_url:
+                    from voice_processor import voice_processor
+                    transcription = await voice_processor.transcribe_audio(media_url)
+                    print(f"🎤 Voice Note Transcribed: {transcription}")
+                    if transcription:
+                        raw_message = transcription
+    except Exception as e:
+        print(f"Voice Note Error: {e}")
+        await asyncio.to_thread(send_whatsapp_reply, seller_id, "⚠️ We couldn't transcribe your voice note at the moment. Please send a text message instead.") # type: ignore
+        return {"status": "error", "message": "Voice Transcription Error"}
+    
+    # --- Phone to UUID Resolution ---
+    extracted_phone = seller_id.replace("whatsapp:", "").replace("+", "")
+    # Attempt to locate the exact seller profile UUID using the phone number
+    real_seller_id = get_seller_id_by_phone(extracted_phone)
+    if not real_seller_id:
+        print(f"Unknown phone number: {extracted_phone}")
+        # The seller doesn't exist natively. Tell them to sign up!
+        reply = "⚠️ Welcome! To create an ONDC catalog, please sign up through our Super Seller Dashboard and link your phone number first."
+        await asyncio.to_thread(send_whatsapp_reply, seller_id, reply) # type: ignore
+        return {"status": "error", "message": "Unregistered Seller Phone"}
+        
+    # We found the seller, swap the Twilio ID out for their database UUID for all downstream operations!
+    seller_id = real_seller_id
     
     # --- Feature 16: Seller Onboarding ---
-    is_new_seller = seller_id not in get_all_seller_ids()
-    if is_new_seller:
-        profile = get_seller_profile(seller_id)
-        if not profile.get("store_name"):
-            save_seller_profile(seller_id, {"phone": seller_id.replace("whatsapp:", "")})
-            welcome = (
-                "🎉 *Welcome to ONDC Super Seller!*\n\n"
-                "I'm your AI catalog assistant. Just tell me what you sell in Hindi or English:\n\n"
-                "• \"10 kg atta for 450 rupees\"\n"
-                "• \"5 packet Maggi at 60 each\"\n\n"
-                "I'll create your ONDC catalog automatically! 📱\n\n"
-                "_Tip: Visit the dashboard to set your store name and address._"
-            )
-            await asyncio.to_thread(send_whatsapp_reply, seller_id, welcome) # type: ignore
-            log_activity(seller_id, "SELLER_ONBOARDED", details="New seller registered")
+    profile = get_seller_profile(seller_id)
+    if not profile.get("store_name"):
+        welcome = (
+            "🎉 *Welcome to ONDC Super Seller!*\n\n"
+            "I'm your AI catalog assistant. Just tell me what you sell in Hindi or English:\n\n"
+            "• \"10 kg atta for 450 rupees\"\n"
+            "• \"5 packet Maggi at 60 each\"\n\n"
+            "I'll create your ONDC catalog automatically! 📱\n\n"
+            "_Tip: Visit the dashboard to set your store name and address._"
+        )
+        await asyncio.to_thread(send_whatsapp_reply, f"whatsapp:{extracted_phone}", welcome) # type: ignore
+        log_activity(seller_id, "SELLER_ONBOARDED", details="New seller interacted", jwt_token=token)
     
-    result = await asyncio.to_thread(process_whatsapp_message, raw_message, seller_id) # type: ignore
+    try:
+        result = await asyncio.to_thread(process_whatsapp_message, raw_message, seller_id) # type: ignore
+    except Exception as e:
+        print(f"Agent Processing Error: {e}")
+        reply = "⚠️ Sorry, our AI is currently experiencing high traffic or a timeout. Please try again in a moment."
+        await asyncio.to_thread(send_whatsapp_reply, seller_id, reply) # type: ignore
+        return {"status": "error", "message": "LLM API Error"}
     
     # Build and send WhatsApp reply
     intent = result.get("intent", "UNKNOWN")
@@ -296,45 +310,15 @@ async def whatsapp_webhook(request: Request):
         reply = "🤔 Sorry, I couldn't understand that. Try something like:\n• \"Add 10 kg atta at 450 rupees\"\n• \"Remove Maggi from my catalog\"\n• \"Update rice price to 60 rupees\""
         log_activity(seller_id, "UNKNOWN_INTENT", raw_message)
     
-    # Send reply asynchronously
-    await asyncio.to_thread(send_whatsapp_reply, seller_id, reply) # type: ignore
+    # Send reply asynchronously targeting the original Twilio From formatting
+    await asyncio.to_thread(send_whatsapp_reply, f"whatsapp:{extracted_phone}", reply) # type: ignore
     
     return {"status": "success", "processed_data": result, "reply_sent": reply}
-
-# --- Auth Endpoints ---
-@app.post("/api/auth/register")
-@limiter.limit("10/minute")
-async def register_user(request: Request, body: RegisterRequest):
-    email = body.email.strip().lower()
-    if get_user_by_email(email):
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    seller_id = f"whatsapp:+91{str(uuid.uuid4().int)[0:10]}"
-    user_id = str(uuid.uuid4())
-    password_hash = hash_password(body.password)
-    
-    create_user(user_id, email, password_hash, seller_id)
-    save_seller_profile(seller_id, {"phone": seller_id.replace("whatsapp:", "")})
-    
-    return {"status": "success", "message": "User created", "seller_id": seller_id}
-
-@app.post("/api/auth/login")
-@limiter.limit("20/minute")
-async def login_user(request: Request, body: LoginRequest):
-    email = body.email.strip().lower()
-    user = get_user_by_email(email)
-    
-    if not user or not verify_password(body.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-        
-    token_data = {"sub": user["seller_id"], "email": email, "exp": datetime.utcnow() + timedelta(hours=24)}
-    token = jwt.encode(token_data, JWT_SECRET, algorithm=JWT_ALGORITHM)
-    
-    return {"status": "success", "token": token, "seller_id": user["seller_id"]}
 
 # --- Catalog endpoints ---
 @app.get("/api/catalog")
 async def get_master_catalog(
+    token: Optional[str] = Depends(get_jwt_token),
     limit: int = 50,
     offset: int = 0,
     seller_id: Optional[str] = None,
@@ -344,7 +328,7 @@ async def get_master_catalog(
 ):
     """Endpoint for the dashboard to fetch the latest ONDC catalog."""
     if seller_id:
-        catalogs = [get_catalog(seller_id)]
+        catalogs = [get_catalog(seller_id, jwt_token=token)]
     else:
         catalogs = get_all_catalogs()
     
@@ -414,14 +398,14 @@ async def get_master_catalog(
 
 # --- SSE Stream ---
 @app.get("/api/catalog/stream")
-async def catalog_stream(seller_id: Optional[str] = None):
+async def catalog_stream(seller_id: Optional[str] = None, token: Optional[str] = Depends(get_jwt_token)):
     """Server-Sent Events endpoint for push-based catalog updates."""
     async def event_generator():
         last_hash = ""
         while True:
             try:
                 if seller_id:
-                    catalogs = [get_catalog(seller_id)]
+                    catalogs = [get_catalog(seller_id, jwt_token=token)]
                 else:
                     catalogs = get_all_catalogs()
                 
@@ -476,24 +460,24 @@ async def catalog_stream(seller_id: Optional[str] = None):
 
 # --- Sellers endpoint ---
 @app.get("/api/sellers")
-async def list_sellers():
+async def list_sellers(token: Optional[str] = Depends(get_jwt_token)):
     """Returns a list of all seller IDs known to the system."""
     seller_ids = get_all_seller_ids()
     return {"sellers": seller_ids}
 
 # --- Activity Log ---
 @app.get("/api/activity")
-async def get_activity(limit: int = 50, seller_id: Optional[str] = None):
+async def get_activity(limit: int = 50, seller_id: Optional[str] = None, token: Optional[str] = Depends(get_jwt_token)):
     """Returns recent activity log entries."""
-    logs = get_activity_logs(limit=limit, seller_id=seller_id or "")
+    logs = get_activity_logs(limit=limit, seller_id=seller_id or "", jwt_token=token)
     return {"logs": logs}
 
 # --- Analytics ---
 @app.get("/api/analytics")
-async def get_analytics(seller_id: Optional[str] = None):
+async def get_analytics(seller_id: Optional[str] = None, token: Optional[str] = Depends(get_jwt_token)):
     """Returns analytics data for the dashboard."""
     if seller_id:
-        catalogs = [get_catalog(seller_id)]
+        catalogs = [get_catalog(seller_id, jwt_token=token)]
     else:
         catalogs = get_all_catalogs()
     
@@ -556,8 +540,8 @@ async def get_analytics(seller_id: Optional[str] = None):
 # --- CRUD with auth + activity logging ---
 @app.post("/api/catalog/item", dependencies=[Depends(verify_api_key)])
 @limiter.limit("60/minute")
-async def create_item(request: Request, item: ItemCreate):
-    catalog = get_catalog(item.seller_id)
+async def create_item(request: Request, item: ItemCreate, token: Optional[str] = Depends(get_jwt_token)):
+    catalog = get_catalog(item.seller_id, jwt_token=token)
     try:
         items = catalog["bpp/catalog"]["bpp/providers"][0].get("items", [])
     except (KeyError, IndexError, TypeError):
@@ -592,14 +576,14 @@ async def create_item(request: Request, item: ItemCreate):
         }
         
     catalog["bpp/catalog"]["bpp/providers"][0]["items"] = items
-    save_catalog(item.seller_id, catalog)
-    log_activity(item.seller_id, "ITEM_ADDED", item.name, f"Price: ₹{item.price}, Qty: {item.quantity} {item.unit}")
+    save_catalog(item.seller_id, catalog, jwt_token=token)
+    log_activity(item.seller_id, "ITEM_ADDED", item.name, f"Price: ₹{item.price}, Qty: {item.quantity} {item.unit}", jwt_token=token)
     return {"status": "success", "item": new_item, "message": f"Added {item.name} — ₹{item.price} × {item.quantity} {item.unit}"}
 
 @app.put("/api/catalog/item/{item_id}", dependencies=[Depends(verify_api_key)])
 @limiter.limit("60/minute")
-async def update_item(request: Request, item_id: str, item: ItemUpdate):
-    catalog = get_catalog(item.seller_id)
+async def update_item(request: Request, item_id: str, item: ItemUpdate, token: Optional[str] = Depends(get_jwt_token)):
+    catalog = get_catalog(item.seller_id, jwt_token=token)
     try:
         items = catalog["bpp/catalog"]["bpp/providers"][0].get("items", [])
     except (KeyError, IndexError, TypeError):
@@ -624,19 +608,19 @@ async def update_item(request: Request, item_id: str, item: ItemUpdate):
             
             if "descriptor" not in i: i["descriptor"] = {}
             i["descriptor"]["short_desc"] = f"{qty} {unit} of {name}"
-            log_activity(item.seller_id, "ITEM_UPDATED", name, f"Price: ₹{item.price}, Qty: {item.quantity}")
+            log_activity(item.seller_id, "ITEM_UPDATED", name, f"Price: ₹{item.price}, Qty: {item.quantity}", jwt_token=token)
             break
             
     catalog["bpp/catalog"]["bpp/providers"][0]["items"] = items
-    save_catalog(item.seller_id, catalog)
+    save_catalog(item.seller_id, catalog, jwt_token=token)
     return {"status": "success"}
 
 @app.delete("/api/catalog/item/{item_id}", dependencies=[Depends(verify_api_key)])
 @limiter.limit("60/minute")
-async def delete_item(request: Request, item_id: str, seller_id: str):
+async def delete_item(request: Request, item_id: str, seller_id: str, token: Optional[str] = Depends(get_jwt_token)):
     from urllib.parse import unquote
     clean_seller_id = unquote(seller_id)
-    catalog = get_catalog(clean_seller_id)
+    catalog = get_catalog(clean_seller_id, jwt_token=token)
     try:
         items = catalog["bpp/catalog"]["bpp/providers"][0].get("items", [])
     except (KeyError, IndexError, TypeError):
@@ -650,18 +634,18 @@ async def delete_item(request: Request, item_id: str, seller_id: str):
 
     updated_items = [i for i in items if isinstance(i, dict) and i.get("id") != item_id]
     catalog["bpp/catalog"]["bpp/providers"][0]["items"] = updated_items
-    save_catalog(clean_seller_id, catalog)
+    save_catalog(clean_seller_id, catalog, jwt_token=token)
     log_activity(clean_seller_id, "ITEM_DELETED", deleted_name)
     return {"status": "success", "message": f"Removed {deleted_name} from your catalog"}
 
 # --- Bulk delete ---
 @app.post("/api/catalog/bulk-delete", dependencies=[Depends(verify_api_key)])
 @limiter.limit("30/minute")
-async def bulk_delete_items(request: Request, req: BulkDeleteRequest):
+async def bulk_delete_items(request: Request, req: BulkDeleteRequest, token: Optional[str] = Depends(get_jwt_token)):
     """Delete multiple items at once."""
     from urllib.parse import unquote
     clean_seller_id = unquote(req.seller_id)
-    catalog = get_catalog(clean_seller_id)
+    catalog = get_catalog(clean_seller_id, jwt_token=token)
     try:
         items = catalog["bpp/catalog"]["bpp/providers"][0].get("items", [])
     except (KeyError, IndexError, TypeError):
@@ -672,25 +656,25 @@ async def bulk_delete_items(request: Request, req: BulkDeleteRequest):
     updated_items = [i for i in items if isinstance(i, dict) and i.get("id") not in ids_to_delete]
     
     catalog["bpp/catalog"]["bpp/providers"][0]["items"] = updated_items
-    save_catalog(clean_seller_id, catalog)
+    save_catalog(clean_seller_id, catalog, jwt_token=token)
     log_activity(clean_seller_id, "BULK_DELETE", ", ".join(deleted_names), f"Deleted {len(deleted_names)} items")
     return {"status": "success", "deleted_count": len(deleted_names)}
 
 # --- Seller Profiles ---
 @app.get("/api/seller/{seller_id}/profile")
-async def get_profile(seller_id: str):
+async def get_profile(seller_id: str, token: Optional[str] = Depends(get_jwt_token)):
     """Get a seller's profile."""
     from urllib.parse import unquote
-    profile = get_seller_profile(unquote(seller_id))
+    profile = get_seller_profile(unquote(seller_id), jwt_token=token)
     return {"profile": profile}
 
 @app.put("/api/seller/{seller_id}/profile", dependencies=[Depends(verify_api_key)])
 @limiter.limit("30/minute")
-async def update_profile(request: Request, seller_id: str, profile: SellerProfileUpdate):
+async def update_profile(request: Request, seller_id: str, profile: SellerProfileUpdate, token: Optional[str] = Depends(get_jwt_token)):
     """Update a seller's profile."""
     from urllib.parse import unquote
     clean_id = unquote(seller_id)
-    existing = get_seller_profile(clean_id)
+    existing = get_seller_profile(clean_id, jwt_token=token)
     updated = {
         "store_name": profile.store_name if profile.store_name is not None else existing.get("store_name", ""),
         "address": profile.address if profile.address is not None else existing.get("address", ""),
@@ -699,14 +683,14 @@ async def update_profile(request: Request, seller_id: str, profile: SellerProfil
         "phone": profile.phone if profile.phone is not None else existing.get("phone", ""),
         "low_stock_alerts": profile.low_stock_alerts if profile.low_stock_alerts is not None else existing.get("low_stock_alerts", False),
     }
-    save_seller_profile(clean_id, updated)
-    log_activity(clean_id, "PROFILE_UPDATED", details=f"Store: {updated['store_name']}")
-    return {"status": "success", "profile": get_seller_profile(clean_id)}
+    save_seller_profile(clean_id, updated, jwt_token=token)
+    log_activity(clean_id, "PROFILE_UPDATED", details=f"Store: {updated['store_name']}", jwt_token=token)
+    return {"status": "success", "profile": get_seller_profile(clean_id, jwt_token=token)}
 
 # --- Feature 14: Order Management ---
 @app.post("/api/orders", dependencies=[Depends(verify_api_key)])
 @limiter.limit("60/minute")
-async def place_order(request: Request, order: OrderCreate):
+async def place_order(request: Request, order: OrderCreate, token: Optional[str] = Depends(get_jwt_token)):
     """Create a new order and notify the seller via WhatsApp."""
     order_id = str(uuid.uuid4())
     order_data = {
@@ -718,11 +702,11 @@ async def place_order(request: Request, order: OrderCreate):
         "total_amount": order.total_amount,
         "status": "PLACED"
     }
-    create_order(order_data)
+    create_order(order_data, jwt_token=token)
     
     # Extract order_id substring cautiously to satiate Pyre slice infer errors
     short_id = order_id[:8] # type: ignore
-    log_activity(order.seller_id, "ORDER_PLACED", details=f"Order {short_id} — ₹{order.total_amount}")
+    log_activity(order.seller_id, "ORDER_PLACED", details=f"Order {short_id} — ₹{order.total_amount}", jwt_token=token)
     
     # Notify seller via WhatsApp
     item_lines = "\n".join([f"  • {i.get('name', '?')} × {i.get('quantity', 1)}" for i in order.items])
@@ -739,6 +723,7 @@ async def place_order(request: Request, order: OrderCreate):
 
 @app.get("/api/orders")
 async def list_orders(
+    token: Optional[str] = Depends(get_jwt_token),
     seller_id: Optional[str] = None,
     status: Optional[str] = None,
     limit: int = 50,
@@ -753,34 +738,35 @@ async def list_orders(
         limit=limit,
         date_from=date_from or "",
         date_to=date_to or "",
-        search=search or ""
+        search=search or "",
+        jwt_token=token
     )
     return {"orders": orders}
 
 @app.put("/api/orders/{order_id}/status", dependencies=[Depends(verify_api_key)])
 @limiter.limit("60/minute")
-async def change_order_status(request: Request, order_id: str, body: OrderStatusUpdate):
+async def change_order_status(request: Request, order_id: str, body: OrderStatusUpdate, token: Optional[str] = Depends(get_jwt_token)):
     """Update order status (PLACED → ACCEPTED → SHIPPED → DELIVERED or CANCELLED)."""
     valid_statuses = {"PLACED", "ACCEPTED", "SHIPPED", "DELIVERED", "CANCELLED"}
     if body.status not in valid_statuses:
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {', '.join(valid_statuses)}")
     
-    success = update_order_status(order_id, body.status)
+    success = update_order_status(order_id, body.status, jwt_token=token)
     if not success:
         raise HTTPException(status_code=404, detail="Order not found")
     
     short_id = order_id[:8] # type: ignore
-    log_activity("", f"ORDER_{body.status}", details=f"Order {short_id}")
+    log_activity("", f"ORDER_{body.status}", details=f"Order {short_id}", jwt_token=token)
     return {"status": "success", "order_status": body.status}
 
 # --- Feature 17: Catalog Import ---
 @app.post("/api/catalog/import", dependencies=[Depends(verify_api_key)])
 @limiter.limit("10/minute")
-async def import_catalog(request: Request, data: CatalogImport):
+async def import_catalog(request: Request, data: CatalogImport, token: Optional[str] = Depends(get_jwt_token)):
     """Import items into a seller's catalog (merges with existing)."""
     from urllib.parse import unquote
     clean_seller_id = unquote(data.seller_id)
-    catalog = get_catalog(clean_seller_id)
+    catalog = get_catalog(clean_seller_id, jwt_token=token)
     
     existing_items: List[Dict[str, Any]] = []
     try:
@@ -812,14 +798,14 @@ async def import_catalog(request: Request, data: CatalogImport):
         imported_count += 1
     
     catalog["bpp/catalog"]["bpp/providers"][0]["items"] = existing_items
-    save_catalog(clean_seller_id, catalog)
-    log_activity(clean_seller_id, "CATALOG_IMPORTED", details=f"Imported {imported_count} items")
+    save_catalog(clean_seller_id, catalog, jwt_token=token)
+    log_activity(clean_seller_id, "CATALOG_IMPORTED", details=f"Imported {imported_count} items", jwt_token=token)
     
     return {"status": "success", "imported_count": imported_count, "total_items": len(existing_items)}
 
 @app.post("/api/catalog/import/csv", dependencies=[Depends(verify_api_key)])
 @limiter.limit("10/minute")
-async def import_csv(request: Request, seller_id: str = ""):
+async def import_csv(request: Request, seller_id: str = "", token: Optional[str] = Depends(get_jwt_token)):
     """Import catalog from CSV file upload (multipart/form-data)."""
     import csv
     import io
@@ -836,7 +822,7 @@ async def import_csv(request: Request, seller_id: str = ""):
     text = contents.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
     
-    catalog = get_catalog(clean_seller_id)
+    catalog = get_catalog(clean_seller_id, jwt_token=token)
     existing_items: List[Dict[str, Any]] = []
     try:
         data_arr = catalog.get("bpp/catalog", {}).get("bpp/providers", [{}])[0].get("items", [])
@@ -880,8 +866,8 @@ async def import_csv(request: Request, seller_id: str = ""):
     
     if imported_count > 0:
         catalog["bpp/catalog"]["bpp/providers"][0]["items"] = existing_items
-        save_catalog(clean_seller_id, catalog)
-        log_activity(clean_seller_id, "CSV_IMPORTED", details=f"Imported {imported_count} items from CSV")
+        save_catalog(clean_seller_id, catalog, jwt_token=token)
+        log_activity(clean_seller_id, "CSV_IMPORTED", details=f"Imported {imported_count} items from CSV", jwt_token=token)
     
     return {
         "status": "success",
@@ -896,6 +882,7 @@ async def health_check():
 
 # --- Feature 6: Low Stock Alert Background Task ---
 async def check_low_stock_alerts():
+    token = None
     """Background task that runs hourly, checks each seller's inventory,
     and sends WhatsApp alerts if low_stock_alerts is enabled."""
     while True:
@@ -907,7 +894,7 @@ async def check_low_stock_alerts():
                 if not profile.get("low_stock_alerts"):
                     continue
                 
-                catalog = get_catalog(sid)
+                catalog = get_catalog(sid, jwt_token=token)
                 try:
                     items = catalog.get("bpp/catalog", {}).get("bpp/providers", [{}])[0].get("items", [])
                 except (KeyError, IndexError):
@@ -931,7 +918,7 @@ async def check_low_stock_alerts():
                         + "\n\n_Update stock via WhatsApp or dashboard._"
                     )
                     send_whatsapp_reply(sid, alert)
-                    log_activity(sid, "LOW_STOCK_ALERT", details=f"{len(low_stock_items)} items low")
+                    log_activity(sid, "LOW_STOCK_ALERT", details=f"{len(low_stock_items, jwt_token=token)} items low")
         except Exception:
             pass  # Never let the background task crash
 

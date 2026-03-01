@@ -5,8 +5,7 @@ import { ArrowLeft, User, Lock, Mail, ArrowRight } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { supabase } from "@/lib/supabase";
 
 export default function LoginPage() {
     const [email, setEmail] = useState("");
@@ -20,22 +19,19 @@ export default function LoginPage() {
         const loadingToast = toast.loading("Signing in...");
 
         try {
-            const res = await fetch(`${API_URL}/api/auth/login`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email, password }),
+            const { data, error } = await supabase.auth.signInWithPassword({
+                email,
+                password,
             });
 
-            if (res.ok) {
-                const data = await res.json();
+            if (error) throw error;
+
+            if (data.session) {
                 toast.success("Welcome back!", { id: loadingToast });
-                login(data.token, data.seller_id);
-            } else {
-                const err = await res.json();
-                toast.error(err.detail || "Invalid email or password", { id: loadingToast });
+                login(data.session.access_token, data.session.user.id);
             }
-        } catch {
-            toast.error("Network error. Please try again.", { id: loadingToast });
+        } catch (error: any) {
+            toast.error(error.message || "Invalid email or password", { id: loadingToast });
         } finally {
             setLoading(false);
         }

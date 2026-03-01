@@ -1,260 +1,223 @@
-import sqlite3
+import os
 import json
-import threading
 from datetime import datetime
-from contextlib import contextmanager
+from supabase import create_client, Client, ClientOptions
+from dotenv import load_dotenv
 
-_db_lock = threading.Lock()
+load_dotenv()
 
-@contextmanager
-def get_db_connection():
-    conn = sqlite3.connect('sellers_memory.db', check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-    finally:
-        conn.close()
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
-def init_db():
-    """Run this once on startup to create the tables."""
-    with _db_lock:
-        with get_db_connection() as conn:
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS catalogs (
-                    seller_id TEXT PRIMARY KEY,
-                    catalog_data TEXT
-                )
-            ''')
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS activity_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    seller_id TEXT NOT NULL,
-                    action TEXT NOT NULL,
-                    item_name TEXT,
-                    details TEXT
-                )
-            ''')
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS seller_profiles (
-                    seller_id TEXT PRIMARY KEY,
-                    store_name TEXT DEFAULT '',
-                    address TEXT DEFAULT '',
-                    gst_number TEXT DEFAULT '',
-                    logo_url TEXT DEFAULT '',
-                    phone TEXT DEFAULT '',
-                    low_stock_alerts INTEGER DEFAULT 0,
-                    updated_at TEXT
-                )
-            ''')
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS orders (
-                    id TEXT PRIMARY KEY,
-                    seller_id TEXT NOT NULL,
-                    buyer_name TEXT DEFAULT '',
-                    buyer_phone TEXT DEFAULT '',
-                    items_json TEXT DEFAULT '[]',
-                    total_amount REAL DEFAULT 0,
-                    status TEXT DEFAULT 'PLACED',
-                    created_at TEXT,
-                    updated_at TEXT
-                )
-            ''')
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    id TEXT PRIMARY KEY,
-                    email TEXT UNIQUE NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    seller_id TEXT UNIQUE NOT NULL,
-                    created_at TEXT
-                )
-            ''')
-            conn.commit()
+def get_supabase_client(jwt_token: str = None) -> Client:
+    """
+    Returns a Supabase client.
+    If a user JWT is provided, requests will be authenticated as that user (respecting RLS).
+    If no JWT is provided, falls back to the service_role key (bypassing RLS for webhooks/admin).
+    """
+    if jwt_token:
+        options = ClientOptions(headers={"Authorization": f"Bearer {jwt_token}"})
+        return create_client(SUPABASE_URL, SUPABASE_ANON_KEY, options=options)
+    else:
+        return create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-# --- Auth ---
+# --- Empty Auth Stubs (Supabase Auth replaces custom auth) ---
 def create_user(user_id: str, email: str, password_hash: str, seller_id: str):
-    with _db_lock:
-        with get_db_connection() as conn:
-            conn.execute(
-                'INSERT INTO users (id, email, password_hash, seller_id, created_at) VALUES (?, ?, ?, ?, ?)',
-                (user_id, email, password_hash, seller_id, datetime.utcnow().isoformat() + "Z")
-            )
-            conn.commit()
+    pass
 
 def get_user_by_email(email: str) -> dict | None:
-    with _db_lock:
-        with get_db_connection() as conn:
-            row = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
-            if row:
-                return dict(row)
-            return None
+    pass
 
-def save_catalog(seller_id: str, catalog_json: dict):
-    """Inserts or overwrites a shopkeeper's specific ONDC catalog."""
-    with _db_lock:
-        with get_db_connection() as conn:
-            conn.execute(
-                'INSERT OR REPLACE INTO catalogs (seller_id, catalog_data) VALUES (?, ?)',
-                (seller_id, json.dumps(catalog_json))
-            )
-            conn.commit()
-
-def get_catalog(seller_id: str) -> dict:
-    """Retrieves a specific shopkeeper's catalog if it exists."""
-    with _db_lock:
-        with get_db_connection() as conn:
-            row = conn.execute('SELECT catalog_data FROM catalogs WHERE seller_id = ?', (seller_id,)).fetchone()
-    if row:
-        return json.loads(row['catalog_data'])
+# --- Catalog (Products Table Mapping) ---
+def build_empty_catalog():
     return {"bpp/catalog": {"bpp/providers": [{"items": []}]}}
 
+def get_catalog(seller_id: str, jwt_token: str = None) -> dict:
+    """Retrieve catalog products and format them as an ONDC Beckn catalog."""
+    sb = get_supabase_client(jwt_token)
+    try:
+        response = sb.table("products").select("*").eq("seller_id", seller_id).execute()
+    except Exception as e:
+        print(f"Supabase GET Error: {e}")
+        return build_empty_catalog()
+    
+    catalog = build_empty_catalog()
+    if response.data:
+        items = []
+        for row in response.data:
+            items.append({
+                "id": str(row["id"]),
+                "descriptor": {"name": row["name"]},
+                "price": {"value": str(row["price"]), "currency": "INR"},
+                "quantity": {"available": {"count": row["quantity"]}},
+                "category_id": row.get("category_id", "Grocery"),
+                "unit": row.get("unit", "")
+            })
+        catalog["bpp/catalog"]["bpp/providers"][0]["items"] = items
+        
+    return catalog
+
+def save_catalog(seller_id: str, catalog_json: dict, jwt_token: str = None):
+    """Takes a full ONDC Beckn catalog and syncs it with the `products` table."""
+    ensure_profile_exists(seller_id, jwt_token)
+    sb = get_supabase_client(jwt_token)
+    
+    try:
+        items = catalog_json["bpp/catalog"]["bpp/providers"][0]["items"]
+    except (KeyError, IndexError):
+        items = []
+    
+    # We will delete all current products for this seller and insert the new ones.
+    # Note: A real production system might prefer fine-grained upserts without deleting,
+    # but since the agent manipulates the entire JSON array, full sync is safest.
+    try:
+        sb.table("products").delete().eq("seller_id", seller_id).execute()
+        
+        if items:
+            inserts = []
+            for item in items:
+                inserts.append({
+                    "id": item.get("id"),
+                    "seller_id": seller_id,
+                    "name": item["descriptor"]["name"],
+                    "price": float(item["price"]["value"]),
+                    "quantity": int(item["quantity"]["available"]["count"]),
+                    "category_id": item.get("category_id", "Grocery"),
+                    "unit": item.get("unit", "")
+                })
+            sb.table("products").insert(inserts).execute()
+    except Exception as e:
+        print(f"Supabase save_catalog Error: {e}")
+
 def get_all_catalogs() -> list:
-    """Helper for the dashboard to quickly render everyone."""
-    with _db_lock:
-        with get_db_connection() as conn:
-            rows = conn.execute('SELECT catalog_data FROM catalogs').fetchall()
-    return [json.loads(row['catalog_data']) for row in rows]
+    """Helper for the dashboard to quickly render everyone (Service Role used)."""
+    sb = get_supabase_client()
+    profiles_resp = sb.table("profiles").select("id").execute()
+    catalogs = []
+    for p in profiles_resp.data:
+        catalogs.append(get_catalog(p["id"]))
+    return catalogs
 
 def get_all_seller_ids() -> list:
     """Returns a list of all seller IDs in the database."""
-    with _db_lock:
-        with get_db_connection() as conn:
-            rows = conn.execute('SELECT seller_id FROM catalogs').fetchall()
-    return [row['seller_id'] for row in rows]
+    sb = get_supabase_client()
+    response = sb.table("profiles").select("id").execute()
+    return [row["id"] for row in response.data] if response.data else []
 
 # --- Activity Log ---
-def log_activity(seller_id: str, action: str, item_name: str = "", details: str = ""):
-    """Log an activity event to the audit trail."""
-    with _db_lock:
-        with get_db_connection() as conn:
-            conn.execute(
-                'INSERT INTO activity_logs (timestamp, seller_id, action, item_name, details) VALUES (?, ?, ?, ?, ?)',
-                (datetime.utcnow().isoformat(), seller_id, action, item_name, details)
-            )
-            conn.commit()
+def log_activity(seller_id: str, action: str, item_name: str = "", details: str = "", jwt_token: str = None):
+    ensure_profile_exists(seller_id, jwt_token)
+    sb = get_supabase_client(jwt_token)
+    try:
+        sb.table("activity_log").insert({
+            "seller_id": seller_id,
+            "action": action,
+            "item_name": item_name,
+            "details": details
+        }).execute()
+    except Exception as e:
+        print(f"Supabase log_activity Error: {e}")
 
-def get_activity_logs(limit: int = 50, seller_id: str = "") -> list:
-    """Retrieve recent activity logs, optionally filtered by seller."""
-    with _db_lock:
-        with get_db_connection() as conn:
-            if seller_id:
-                rows = conn.execute(
-                    'SELECT * FROM activity_logs WHERE seller_id = ? ORDER BY id DESC LIMIT ?',
-                    (seller_id, limit)
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    'SELECT * FROM activity_logs ORDER BY id DESC LIMIT ?',
-                    (limit,)
-                ).fetchall()
-    return [dict(row) for row in rows]
+def get_activity_logs(limit: int = 50, seller_id: str = "", jwt_token: str = None) -> list:
+    sb = get_supabase_client(jwt_token)
+    query = sb.table("activity_log").select("*")
+    if seller_id:
+        query = query.eq("seller_id", seller_id)
+    response = query.order("id", desc=True).limit(limit).execute()
+    return response.data if response.data else []
 
 # --- Seller Profiles ---
-def save_seller_profile(seller_id: str, profile: dict):
-    """Create or update a seller's profile."""
-    with _db_lock:
-        with get_db_connection() as conn:
-            conn.execute(
-                '''INSERT OR REPLACE INTO seller_profiles
-                   (seller_id, store_name, address, gst_number, logo_url, phone, low_stock_alerts, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                (
-                    seller_id,
-                    profile.get("store_name", ""),
-                    profile.get("address", ""),
-                    profile.get("gst_number", ""),
-                    profile.get("logo_url", ""),
-                    profile.get("phone", ""),
-                    1 if profile.get("low_stock_alerts") else 0,
-                    datetime.utcnow().isoformat()
-                )
-            )
-            conn.commit()
+def ensure_profile_exists(seller_id: str, jwt_token: str = None):
+    sb = get_supabase_client(jwt_token)
+    try:
+        existing = sb.table("profiles").select("id").eq("id", seller_id).execute()
+        if not existing.data:
+            sb.table("profiles").insert({"id": seller_id, "user_id": seller_id}).execute()
+    except Exception as e:
+        print(f"ensure_profile_exists error: {e}")
 
-def get_seller_profile(seller_id: str) -> dict:
-    """Retrieve a seller's profile, or empty defaults."""
-    with _db_lock:
-        with get_db_connection() as conn:
-            row = conn.execute('SELECT * FROM seller_profiles WHERE seller_id = ?', (seller_id,)).fetchone()
-    if row:
-        d = dict(row)
-        d["low_stock_alerts"] = bool(d.get("low_stock_alerts", 0))
-        return d
+def get_seller_id_by_phone(phone: str, jwt_token: str = None) -> str:
+    """Looks up a seller's UUID by their registered phone number."""
+    sb = get_supabase_client(jwt_token)
+    try:
+        response = sb.table("profiles").select("id").eq("phone", phone).execute()
+        if response.data:
+            return response.data[0]["id"]
+    except Exception as e:
+        print(f"Phone lookup error: {e}")
+    return None
+
+def save_seller_profile(seller_id: str, profile: dict, jwt_token: str = None):
+    sb = get_supabase_client(jwt_token)
+    try:
+        existing = sb.table("profiles").select("*").eq("id", seller_id).execute()
+        current_data = existing.data[0] if existing.data else {"id": seller_id, "user_id": seller_id}
+        
+        for key, value in profile.items():
+            current_data[key] = value
+            
+        current_data["updated_at"] = datetime.utcnow().isoformat()
+        sb.table("profiles").upsert(current_data).execute()
+    except Exception as e:
+        print(f"Supabase upsert profile Error: {e}")
+
+def get_seller_profile(seller_id: str, jwt_token: str = None) -> dict:
+    sb = get_supabase_client(jwt_token)
+    response = sb.table("profiles").select("*").eq("id", seller_id).execute()
+    if response.data:
+        return response.data[0]
     return {
-        "seller_id": seller_id,
+        "id": seller_id,
         "store_name": "",
         "address": "",
         "gst_number": "",
         "logo_url": "",
         "phone": "",
-        "low_stock_alerts": False,
-        "updated_at": None
+        "low_stock_alerts": False
     }
 
 # --- Orders ---
-def create_order(order: dict):
-    """Create a new order."""
-    with _db_lock:
-        with get_db_connection() as conn:
-            conn.execute(
-                '''INSERT INTO orders (id, seller_id, buyer_name, buyer_phone, items_json, total_amount, status, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                (
-                    order["id"],
-                    order["seller_id"],
-                    order.get("buyer_name", ""),
-                    order.get("buyer_phone", ""),
-                    json.dumps(order.get("items", [])),
-                    order.get("total_amount", 0),
-                    order.get("status", "PLACED"),
-                    datetime.utcnow().isoformat(),
-                    datetime.utcnow().isoformat()
-                )
-            )
-            conn.commit()
+def create_order(order: dict, jwt_token: str = None):
+    sb = get_supabase_client(jwt_token)
+    sb.table("orders").insert({
+        "id": order["id"],
+        "seller_id": order["seller_id"],
+        "buyer_name": order.get("buyer_name", ""),
+        "buyer_phone": order.get("buyer_phone", ""),
+        "items_json": order.get("items", []),
+        "total_amount": order.get("total_amount", 0),
+        "status": order.get("status", "PLACED")
+    }).execute()
 
-def get_orders(seller_id: str = "", status: str = "", limit: int = 50, date_from: str = "", date_to: str = "", search: str = "") -> list:
-    """Retrieve orders, optionally filtered by seller, status, date range, and search."""
-    with _db_lock:
-        with get_db_connection() as conn:
-            query = 'SELECT * FROM orders WHERE 1=1'
-            params: list = []
-            if seller_id:
-                query += ' AND seller_id = ?'
-                params.append(seller_id)
-            if status:
-                query += ' AND status = ?'
-                params.append(status)
-            if date_from:
-                query += ' AND created_at >= ?'
-                params.append(date_from)
-            if date_to:
-                query += ' AND created_at <= ?'
-                params.append(date_to + "T23:59:59")
-            if search:
-                query += ' AND (buyer_name LIKE ? OR id LIKE ?)'
-                params.extend([f"%{search}%", f"%{search}%"])
-            query += ' ORDER BY created_at DESC LIMIT ?'
-            params.append(limit)
-            rows = conn.execute(query, params).fetchall()
+def get_orders(seller_id: str = "", status: str = "", limit: int = 50, date_from: str = "", date_to: str = "", search: str = "", jwt_token: str = None) -> list:
+    sb = get_supabase_client(jwt_token)
+    query = sb.table("orders").select("*")
+    if seller_id:
+        query = query.eq("seller_id", seller_id)
+    if status:
+        query = query.eq("status", status)
+    if date_from:
+        query = query.gte("created_at", date_from)
+    if date_to:
+        query = query.lte("created_at", date_to + "T23:59:59")
+    if search:
+        query = query.or_(f"buyer_name.ilike.%{search}%,id.ilike.%{search}%")
+        
+    response = query.order("created_at", desc=True).limit(limit).execute()
+    
     results = []
-    for row in rows:
-        d = dict(row)
-        d["items"] = json.loads(d.get("items_json", "[]"))
-        d.pop("items_json", None)
-        results.append(d)
+    if response.data:
+        for row in response.data:
+            row["items"] = row.get("items_json", [])
+            row.pop("items_json", None)
+            results.append(row)
     return results
 
-def update_order_status(order_id: str, new_status: str) -> bool:
-    """Update an order's status. Returns True if found."""
-    success = False
-    with _db_lock:
-        with get_db_connection() as conn:
-            cursor = conn.execute(
-                'UPDATE orders SET status = ?, updated_at = ? WHERE id = ?',
-                (new_status, datetime.utcnow().isoformat(), order_id)
-            )
-            conn.commit()
-            success = cursor.rowcount > 0
-    return success
-
+def update_order_status(order_id: str, new_status: str, jwt_token: str = None) -> bool:
+    sb = get_supabase_client(jwt_token)
+    response = sb.table("orders").update({
+        "status": new_status,
+        "updated_at": datetime.utcnow().isoformat()
+    }).eq("id", order_id).execute()
+    return len(response.data) > 0 if response.data else False

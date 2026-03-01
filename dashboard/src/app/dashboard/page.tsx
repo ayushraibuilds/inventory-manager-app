@@ -17,7 +17,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
 export default function Dashboard() {
-  const { sellerId, logout, isLoading } = useAuth();
+  const { sellerId, token, logout, isLoading } = useAuth();
   const activeSellerId = sellerId || "";
 
   const [items, setItems] = useState<CatalogItem[]>([]);
@@ -53,8 +53,12 @@ export default function Dashboard() {
     try {
       if (showToast) setIsRefreshing(true);
       const offset = (page - 1) * LIMIT;
-      const res = await fetch(`${API_URL}/api/catalog?limit=${LIMIT}&offset=${offset}&seller_id=${encodeURIComponent(activeSellerId)}`, { cache: "no-store" });
-
+      const res = await fetch(`${API_URL}/api/catalog?limit=${LIMIT}&offset=${offset}&seller_id=${encodeURIComponent(activeSellerId)}`, {
+        cache: "no-store",
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
       if (res.status === 429) {
         if (showToast) toast.error("Rate limit exceeded. Please wait a moment.");
         throw new Error("Rate limit exceeded");
@@ -162,7 +166,7 @@ export default function Dashboard() {
     try {
       const res = await fetch(`${API_URL}/api/catalog/item`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY, "Authorization": `Bearer ${token}` },
         body: JSON.stringify({ name: formData.name, price: formData.price.toString(), quantity: formData.quantity, unit: formData.unit, seller_id: activeSellerId })
       });
       if (res.status === 429) {
@@ -199,7 +203,7 @@ export default function Dashboard() {
       try {
         const res = await fetch(`${API_URL}/api/catalog/bulk-delete`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+          headers: { "Content-Type": "application/json", "X-API-Key": API_KEY, "Authorization": `Bearer ${token}` },
           body: JSON.stringify({ seller_id: activeSellerId, item_ids: targetItems.map(i => i.id) })
         });
         if (res.status === 429) {
@@ -215,7 +219,7 @@ export default function Dashboard() {
       const item = targetItems[0];
       const loadingToast = toast.loading(`Deleting ${item.name}...`);
       try {
-        const res = await fetch(`${API_URL}/api/catalog/item/${item.id}?seller_id=${encodeURIComponent(activeSellerId)}`, { method: "DELETE", headers: { "X-API-Key": API_KEY } });
+        const res = await fetch(`${API_URL}/api/catalog/item/${item.id}?seller_id=${encodeURIComponent(activeSellerId)}`, { method: "DELETE", headers: { "X-API-Key": API_KEY, "Authorization": `Bearer ${token}` } });
         if (res.status === 429) {
           toast.error("Too many requests. Please slow down.", { id: loadingToast });
           return;
@@ -241,7 +245,7 @@ export default function Dashboard() {
     try {
       const res = await fetch(`${API_URL}/api/catalog/item/${editingItemId}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+        headers: { "Content-Type": "application/json", "X-API-Key": API_KEY, "Authorization": `Bearer ${token}` },
         body: JSON.stringify({ name: formData.name, price: formData.price.toString(), quantity: parseInt(formData.quantity.toString(), 10), unit: formData.unit, seller_id: activeSellerId })
       });
       if (res.status === 429) {
@@ -394,7 +398,8 @@ export default function Dashboard() {
           {/* Activity Log */}
           <ActivityLog selectedSeller={activeSellerId} />
 
-          {/* UPI Settlements */}
+          {/* UPI Settlements (Hidden for now) */}
+          {/*
           <motion.div
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
@@ -411,8 +416,10 @@ export default function Dashboard() {
               <p className="text-xs mt-1 opacity-70">for instant payouts</p>
             </div>
           </motion.div>
+          */}
 
-          {/* Logistics */}
+          {/* Logistics (Hidden for now) */}
+          {/*
           <motion.div
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
@@ -429,6 +436,7 @@ export default function Dashboard() {
               <p className="text-xs mt-1 opacity-70">Integration pending</p>
             </div>
           </motion.div>
+          */}
         </div>
       </div>
 

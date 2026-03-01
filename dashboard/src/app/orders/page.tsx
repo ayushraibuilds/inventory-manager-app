@@ -42,7 +42,7 @@ const NEXT_STATUS: Record<string, string> = {
 };
 
 export default function OrdersPage() {
-    const { sellerId, isLoading } = useAuth();
+    const { sellerId, token, isLoading } = useAuth();
     const activeSellerId = sellerId || "";
 
     const [orders, setOrders] = useState<Order[]>([]);
@@ -82,7 +82,7 @@ export default function OrdersPage() {
         try {
             const res = await fetch(`${API_URL}/api/orders/${orderId}/status`, {
                 method: "PUT",
-                headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+                headers: { "Content-Type": "application/json", "X-API-Key": API_KEY , "Authorization": `Bearer ${token}` },
                 body: JSON.stringify({ status: newStatus }),
             });
             if (res.status === 429) { toast.error("Rate limit exceeded.", { id: loadingToast }); return; }

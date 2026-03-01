@@ -78,7 +78,7 @@ export default function SellerProfilePage({ params }: { params: Promise<{ id: st
         try {
             const res = await fetch(`${API_URL}/api/seller/${encodeURIComponent(sellerId)}/profile`, {
                 method: "PUT",
-                headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+                headers: { "Content-Type": "application/json", "X-API-Key": API_KEY , "Authorization": `Bearer ${token}` },
                 body: JSON.stringify(form),
             });
             if (res.status === 429) {

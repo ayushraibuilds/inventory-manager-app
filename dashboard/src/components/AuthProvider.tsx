@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
+import { supabase } from "@/lib/supabase";
 
 interface AuthContextType {
     token: string | null;
@@ -23,22 +24,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
 
     useEffect(() => {
-        // On mount, check if user is logged in
-        const storedToken = localStorage.getItem("token");
-        const storedSellerId = localStorage.getItem("seller_id");
+        const initSession = async () => {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session) {
+                setToken(session.access_token);
+                setSellerId(session.user.id);
+            }
+            setIsLoading(false);
+        };
+        initSession();
 
-        if (storedToken && storedSellerId) {
-            setToken(storedToken);
-            setSellerId(storedSellerId);
-        }
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+            if (session) {
+                setToken(session.access_token);
+                setSellerId(session.user.id);
+            } else {
+                setToken(null);
+                setSellerId(null);
+            }
+        });
 
-        setIsLoading(false);
+        return () => subscription.unsubscribe();
     }, []);
 
     useEffect(() => {
         if (isLoading) return;
 
-        // Protect routes
         const publicPaths = ["/", "/login", "/signup"];
         if (!token && !publicPaths.includes(pathname)) {
             router.push("/login");
@@ -48,16 +59,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, [token, pathname, isLoading, router]);
 
     const login = (newToken: string, newSellerId: string) => {
-        localStorage.setItem("token", newToken);
-        localStorage.setItem("seller_id", newSellerId);
         setToken(newToken);
         setSellerId(newSellerId);
         router.push("/dashboard");
     };
 
-    const logout = () => {
-        localStorage.removeItem("token");
-        localStorage.removeItem("seller_id");
+    const logout = async () => {
+        await supabase.auth.signOut();
         setToken(null);
         setSellerId(null);
         router.push("/");

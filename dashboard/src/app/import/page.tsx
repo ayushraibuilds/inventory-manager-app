@@ -22,7 +22,7 @@ const CATEGORIES = ["Grocery", "F&B", "Home & Decor", "Health & Wellness", "Elec
 const UNITS = ["piece", "kg", "g", "litre", "ml", "pack", "dozen", "box"];
 
 export default function ImportPage() {
-    const { sellerId, isLoading } = useAuth();
+    const { sellerId, token, isLoading } = useAuth();
     const activeSellerId = sellerId || "";
 
     const [tab, setTab] = useState<"manual" | "csv">("manual");
@@ -58,7 +58,7 @@ export default function ImportPage() {
         try {
             const res = await fetch(`${API_URL}/api/catalog/import`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+                headers: { "Content-Type": "application/json", "X-API-Key": API_KEY , "Authorization": `Bearer ${token}` },
                 body: JSON.stringify({ seller_id: activeSellerId, items: validItems }),
             });
             if (res.status === 429) { toast.error("Too many requests. Try again in a bit.", { id: loadingToast }); return; }
@@ -111,7 +111,7 @@ export default function ImportPage() {
             formData.append("seller_id", activeSellerId);
             const res = await fetch(`${API_URL}/api/catalog/import/csv`, {
                 method: "POST",
-                headers: { "X-API-Key": API_KEY },
+                headers: { "X-API-Key": API_KEY , "Authorization": `Bearer ${token}` },
                 body: formData,
             });
             if (res.status === 429) { toast.error("Too many requests.", { id: loadingToast }); return; }

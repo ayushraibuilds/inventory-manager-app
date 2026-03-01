@@ -7,11 +7,11 @@ import re
 import difflib
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from langchain_ollama import ChatOllama
+from langchain_groq import ChatGroq
 from db import get_catalog, save_catalog
 
 load_dotenv()
-GLOBAL_LLM = ChatOllama(model=os.getenv("LLM_MODEL", "llama3.1"), temperature=0)
+GLOBAL_LLM = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.1)
 
 class AgentState(TypedDict, total=False):
     raw_whatsapp_input: str
@@ -90,7 +90,7 @@ def classify_intent(state: AgentState) -> Dict[str, Any]:
         intent = getattr(result, 'action', 'UNKNOWN')
     except Exception as e:
         print(f"Intent classification failed: {e}")
-        intent = "UNKNOWN"
+        raise RuntimeError("LLM_API_ERROR")
         
     print(f"Detected Intent: {intent}")
     return {"intent": intent}
@@ -117,8 +117,7 @@ def parse_input(state: AgentState) -> Dict[str, Any]:
         result = structured_llm.invoke(prompt)
     except Exception as e:
         print(f"LLM extraction failed: {e}")
-        # Return fallback on error
-        result = CatalogExtraction(items=[ProductEntity(name="Error Item", price_inr="0", quantity_value=1, unit="piece")]) # type: ignore
+        raise RuntimeError("LLM_API_ERROR")
         
     return {
         "translated_text": str(text).lower(),
@@ -267,7 +266,12 @@ def update_item(state: AgentState) -> Dict[str, Any]:
     - Leave unspecified fields as null.
     """
     
-    target = GLOBAL_LLM.with_structured_output(UpdateTarget).invoke(prompt)
+    try:
+        target = GLOBAL_LLM.with_structured_output(UpdateTarget).invoke(prompt)
+    except Exception as e:
+        print(f"Update intent parsing failed: {e}")
+        raise RuntimeError("LLM_API_ERROR")
+        
     print(f"UPDATE Target Parsed: {target}")
     
     target_item_id = getattr(target, 'item_id', None)
@@ -307,7 +311,12 @@ def delete_item(state: AgentState) -> Dict[str, Any]:
     catalog_context = [{"id": item["id"], "name": item["descriptor"]["name"]} for item in items]
     prompt = f"User request: {raw_input}\nCurrent inventory: {catalog_context}\nReturn the exact item_id to delete."
     
-    target = GLOBAL_LLM.with_structured_output(DeleteTarget).invoke(prompt)
+    try:
+        target = GLOBAL_LLM.with_structured_output(DeleteTarget).invoke(prompt)
+    except Exception as e:
+        print(f"Delete intent parsing failed: {e}")
+        raise RuntimeError("LLM_API_ERROR")
+        
     print(f"DELETE Target Parsed: {target}")
     
     target_item_id = getattr(target, 'item_id', None)

@@ -1,0 +1,15 @@
+INFO:     Will watch for changes in these directories: ['/Users/dankmagician/Documents/New project/ondc-super-seller/backend']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [2185] using StatReload
+/Users/dankmagician/Documents/New project/ondc-super-seller/backend/venv/lib/python3.14/site-packages/langchain_core/_api/deprecation.py:25: UserWarning: Core Pydantic V1 functionality isn't compatible with Python 3.14 or greater.
+  from pydantic.v1.fields import FieldInfo as FieldInfoV1
+INFO:     Started server process [2260]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:64762 - "OPTIONS /api/catalog?limit=10&offset=0&seller_id=cd673d1f-5984-441a-befc-a5bf14760db0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64762 - "GET /api/activity?limit=20&seller_id=cd673d1f-5984-441a-befc-a5bf14760db0 HTTP/1.1" 200 OK
+Unknown phone number:  123456789
+INFO:     127.0.0.1:64766 - "POST /whatsapp-webhook HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64762 - "OPTIONS /api/catalog?limit=10&offset=0&seller_id=cd673d1f-5984-441a-befc-a5bf14760db0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64762 - "GET /api/activity?limit=20&seller_id=cd673d1f-5984-441a-befc-a5bf14760db0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64762 - "OPTIONS /api/catalog?limit=10&offset=0&seller_id=cd673d1f-5984-441a-befc-a5bf14760db0 HTTP/1.1" 200 OK
