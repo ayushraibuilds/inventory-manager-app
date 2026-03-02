@@ -165,33 +165,34 @@ def generate_beckn_catalog(state: AgentState) -> Dict[str, Any]:
             if matched_item is not None and isinstance(matched_item, dict):
                 # EXISTS: Add extracted quantity to existing quantity, overwrite old price
                 try:
-                    q_dict = matched_item.get("quantity")
+                    q_dict = matched_item.get("quantity", {})
+                    if not isinstance(q_dict, dict): q_dict = {}
+                    
                     current_qty = 0
-                    if isinstance(q_dict, dict):
-                        a_dict = q_dict.get("available")
-                        if isinstance(a_dict, dict):
-                            current_qty = int(a_dict.get("count", 0))
+                    a_dict = q_dict.get("available", {})
+                    if isinstance(a_dict, dict):
+                        current_qty = int(str(a_dict.get("count", 0) or 0))
                 except (ValueError, TypeError):
                     current_qty = 0
                     
                 new_total = current_qty + new_qty
                 
-                # Safely rebuild nested dicts for Pyre typechecker
-                mq = matched_item.get("quantity")
+                # Safely rebuild nested dicts
+                mq = matched_item.get("quantity", {})
                 if not isinstance(mq, dict): mq = {}
-                ma = mq.get("available")
+                ma = mq.get("available", {})
                 if not isinstance(ma, dict): ma = {}
                 ma["count"] = new_total
                 mq["available"] = ma
                 matched_item["quantity"] = mq
                 
-                mp = matched_item.get("price")
+                mp = matched_item.get("price", {})
                 if not isinstance(mp, dict): mp = {}
                 mp["currency"] = "INR"
                 mp["value"] = new_price
                 matched_item["price"] = mp
                 
-                md = matched_item.get("descriptor")
+                md = matched_item.get("descriptor", {})
                 if not isinstance(md, dict): md = {}
                 md["name"] = new_name
                 md["short_desc"] = f"{new_total} {new_unit} of {new_name}"
@@ -209,7 +210,7 @@ def generate_beckn_catalog(state: AgentState) -> Dict[str, Any]:
                     },
                     "price": {
                         "currency": "INR",
-                        "value": new_price
+                        "value": str(new_price)
                     },
                     "quantity": {
                         "available": {

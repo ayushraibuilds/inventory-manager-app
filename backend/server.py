@@ -46,9 +46,7 @@ async def get_jwt_token(credentials: Optional[HTTPAuthorizationCredentials] = De
         return credentials.credentials
     return None
 
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
-TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "")
+# Twilio tokens will be loaded dynamically via dotenv_values to handle hot-reloads
 
 async def verify_api_key(x_api_key: str = Header(default="")):
     """Dependency that verifies the X-API-Key header on write endpoints."""
@@ -58,12 +56,14 @@ async def verify_api_key(x_api_key: str = Header(default="")):
         raise HTTPException(status_code=403, detail="Invalid API key")
 
 def verify_twilio_signature(request: Request, form_data: dict) -> bool:
-    """Validates Twilio webhook signature. Returns True if valid or if auth is disabled."""
-    if not TWILIO_AUTH_TOKEN:
+    from dotenv import dotenv_values
+    env = dotenv_values(".env")
+    auth_token = env.get("TWILIO_AUTH_TOKEN", "")
+    if not auth_token:
         return True  # Dev mode — skip validation
     try:
         from twilio.request_validator import RequestValidator
-        validator = RequestValidator(TWILIO_AUTH_TOKEN)
+        validator = RequestValidator(auth_token)
         signature = request.headers.get("X-Twilio-Signature", "")
         url = str(request.url)
         return validator.validate(url, form_data, signature)
@@ -73,15 +73,21 @@ def verify_twilio_signature(request: Request, form_data: dict) -> bool:
 
 def send_whatsapp_reply(to: str, body: str):
     """Send a WhatsApp reply via Twilio. Silently fails if not configured."""
-    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_WHATSAPP_FROM:
+    from dotenv import dotenv_values
+    env = dotenv_values(".env")
+    account_sid = env.get("TWILIO_ACCOUNT_SID", "")
+    auth_token = env.get("TWILIO_AUTH_TOKEN", "")
+    whatsapp_from = env.get("TWILIO_WHATSAPP_FROM", "")
+
+    if not account_sid or not auth_token or not whatsapp_from:
         logging.info(f"[DEV MODE] WhatsApp reply to {to}: {body}")
         return
     try:
         from twilio.rest import Client
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        client = Client(account_sid, auth_token)
         client.messages.create(
             body=body,
-            from_=TWILIO_WHATSAPP_FROM,
+            from_=whatsapp_from,
             to=to
         )
     except Exception as e:
@@ -214,12 +220,14 @@ async def whatsapp_webhook(request: Request):
         form_dict = dict(form_data)
         seller_id = form_dict.get("From", "unknown_seller")
         raw_message = form_dict.get("Body", "")
+        print(f"WEBHOOK TRACER: Incoming form payload: From={seller_id} Length={len(raw_message)}")
         
         if not verify_twilio_signature(request, form_dict):
             raise HTTPException(status_code=403, detail="Invalid Twilio signature")
     except HTTPException:
         raise
-    except Exception:
+    except Exception as e:
+        print(f"WEBHOOK TRACER: Form parsing or signature validation crashed with {e}!")
         try:
             json_data = await request.json()
             seller_id = json_data.get("from_number", "unknown_seller")
@@ -276,6 +284,7 @@ async def whatsapp_webhook(request: Request):
         await asyncio.to_thread(send_whatsapp_reply, f"whatsapp:{extracted_phone}", welcome) # type: ignore
         log_activity(seller_id, "SELLER_ONBOARDED", details="New seller interacted", jwt_token=token)
     
+    print("WEBHOOK TRACER: Entering Agent processing thread")
     try:
         result = await asyncio.to_thread(process_whatsapp_message, raw_message, seller_id) # type: ignore
     except Exception as e:

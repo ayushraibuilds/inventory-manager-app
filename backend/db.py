@@ -88,7 +88,7 @@ def save_catalog(seller_id: str, catalog_json: dict, jwt_token: str = None):
                     "category_id": item.get("category_id", "Grocery"),
                     "unit": item.get("unit", "")
                 })
-            sb.table("products").insert(inserts).execute()
+            sb.table("products").upsert(inserts).execute()
     except Exception as e:
         print(f"Supabase save_catalog Error: {e}")
 
