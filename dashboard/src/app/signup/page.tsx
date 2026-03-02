@@ -47,13 +47,15 @@ export default function SignupPage() {
 
             // Call our API to save the extra profile data
             if (data.user) {
+                const rawPhone = phone.replace(/\s+/g, '').replace("+91", "");
+                const formattedPhone = `+91${rawPhone}`;
                 try {
                     await fetch(`${API_URL}/api/seller/${data.user.id}/profile`, {
                         method: "PUT",
-                        headers: { "Content-Type": "application/json" },
+                        headers: { "Content-Type": "application/json", "Authorization": data.session ? `Bearer ${data.session.access_token}` : "" },
                         body: JSON.stringify({
                             store_name: storeName,
-                            phone: phone
+                            phone: formattedPhone
                         }),
                     });
                 } catch (profileError) {
@@ -146,15 +148,16 @@ export default function SignupPage() {
 
                             <div>
                                 <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Phone</label>
-                                <div className="relative">
-                                    <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
+                                <div className="relative flex items-center">
+                                    <Phone className="absolute left-3.5 w-4 h-4 text-[var(--text-muted)]" />
+                                    <span className="absolute left-9 text-[var(--text-muted)] font-medium text-sm">+91</span>
                                     <input
                                         type="tel"
                                         required
-                                        value={phone}
+                                        value={phone.replace("+91", "")}
                                         onChange={e => setPhone(e.target.value)}
-                                        className="w-full bg-[var(--input-bg)] border border-[var(--input-border)] rounded-xl pl-10 pr-4 py-3 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-purple-500/50 transition-colors"
-                                        placeholder="+91..."
+                                        className="w-full bg-[var(--input-bg)] border border-[var(--input-border)] rounded-xl pl-16 pr-4 py-3 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-purple-500/50 transition-colors"
+                                        placeholder="98765 43210"
                                     />
                                 </div>
                             </div>

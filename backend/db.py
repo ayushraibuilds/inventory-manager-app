@@ -4,23 +4,25 @@ from datetime import datetime
 from supabase import create_client, Client, ClientOptions
 from dotenv import load_dotenv
 
-load_dotenv()
-
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
-SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+from dotenv import dotenv_values
 
 def get_supabase_client(jwt_token: str = None) -> Client:
     """
     Returns a Supabase client.
     If a user JWT is provided, requests will be authenticated as that user (respecting RLS).
-    If no JWT is provided, falls back to the service_role key (bypassing RLS for webhooks/admin).
+    If no JWT is provided, falls back to the service_role key.
     """
+    # Dynamically read `.env` bypassing static os.environ cache during hot-reloads
+    env_vars = dotenv_values(".env")
+    url = env_vars.get("SUPABASE_URL", "")
+    anon = env_vars.get("SUPABASE_ANON_KEY", "")
+    service = env_vars.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    
     if jwt_token:
         options = ClientOptions(headers={"Authorization": f"Bearer {jwt_token}"})
-        return create_client(SUPABASE_URL, SUPABASE_ANON_KEY, options=options)
+        return create_client(url, anon, options=options)
     else:
-        return create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        return create_client(url, service)
 
 # --- Empty Auth Stubs (Supabase Auth replaces custom auth) ---
 def create_user(user_id: str, email: str, password_hash: str, seller_id: str):
@@ -158,9 +160,13 @@ def save_seller_profile(seller_id: str, profile: dict, jwt_token: str = None):
             current_data[key] = value
             
         current_data["updated_at"] = datetime.utcnow().isoformat()
-        sb.table("profiles").upsert(current_data).execute()
+        res = sb.table("profiles").upsert(current_data).execute()
+        if hasattr(res, 'error') and res.error:
+            print(f"SUPABASE POSTGREST ERROR: {res.error}")
+        else:
+            print(f"PROFILE UPSERT SUCCESS: {current_data['id']}")
     except Exception as e:
-        print(f"Supabase upsert profile Error: {e}")
+        print(f"Supabase upsert profile Exception: {e}")
 
 def get_seller_profile(seller_id: str, jwt_token: str = None) -> dict:
     sb = get_supabase_client(jwt_token)

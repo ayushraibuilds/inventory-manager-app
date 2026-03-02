@@ -21,8 +21,8 @@ interface SellerProfile {
     updated_at: string | null;
 }
 
-export default function SellerProfilePage({ params }: { params: Promise<{ id: string }> }) {
-    const { sellerId: authSellerId, isLoading: authLoading } = useAuth();
+export default function SellerProfilePage() {
+    const { sellerId: authSellerId, isLoading: authLoading, token } = useAuth();
     const activeSellerId = authSellerId || "";
 
     const [sellerId, setSellerId] = useState<string>("");
@@ -40,15 +40,17 @@ export default function SellerProfilePage({ params }: { params: Promise<{ id: st
     });
 
     useEffect(() => {
-        if (!authLoading && activeSellerId) {
+        if (!authLoading && activeSellerId && token) {
             setSellerId(activeSellerId); // keeping local state for display purposes
-            fetchProfile(activeSellerId);
+            fetchProfile(activeSellerId, token);
         }
-    }, [authLoading, activeSellerId]);
+    }, [authLoading, activeSellerId, token]);
 
-    const fetchProfile = async (id: string) => {
+    const fetchProfile = async (id: string, currentToken: string) => {
         try {
-            const res = await fetch(`${API_URL}/api/seller/${encodeURIComponent(id)}/profile`);
+            const res = await fetch(`${API_URL}/api/seller/${encodeURIComponent(id)}/profile`, {
+                headers: { "Authorization": `Bearer ${currentToken}` }
+            });
             if (res.status === 429) {
                 toast.error("Rate limit exceeded. Please try again later.");
                 return;
@@ -61,7 +63,7 @@ export default function SellerProfilePage({ params }: { params: Promise<{ id: st
                     address: data.profile.address || "",
                     gst_number: data.profile.gst_number || "",
                     logo_url: data.profile.logo_url || "",
-                    phone: data.profile.phone || "",
+                    phone: data.profile.phone ? data.profile.phone.replace("+91", "").trim() : "",
                     low_stock_alerts: !!data.profile.low_stock_alerts,
                 });
             }
@@ -75,11 +77,15 @@ export default function SellerProfilePage({ params }: { params: Promise<{ id: st
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault();
         setSaving(true);
+        const rawPhone = form.phone.replace(/\s+/g, '').replace("+91", "");
+        const formattedPhone = `+91${rawPhone}`;
+        const payload = { ...form, phone: formattedPhone };
+
         try {
             const res = await fetch(`${API_URL}/api/seller/${encodeURIComponent(sellerId)}/profile`, {
                 method: "PUT",
-                headers: { "Content-Type": "application/json", "X-API-Key": API_KEY , "Authorization": `Bearer ${token}` },
-                body: JSON.stringify(form),
+                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+                body: JSON.stringify(payload),
             });
             if (res.status === 429) {
                 toast.error("Rate limit exceeded. Please try again later.");
@@ -197,12 +203,15 @@ export default function SellerProfilePage({ params }: { params: Promise<{ id: st
                             <label className="flex items-center gap-2 text-sm font-medium text-[var(--text-secondary)] mb-1.5">
                                 <Phone className="w-3.5 h-3.5" /> Phone
                             </label>
-                            <input
-                                value={form.phone}
-                                onChange={e => setForm({ ...form, phone: e.target.value })}
-                                className="w-full bg-[var(--input-bg)] border border-[var(--input-border)] rounded-lg px-4 py-2.5 text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-green-500/50 focus:border-green-500 transition-all placeholder-[var(--text-muted)]"
-                                placeholder="e.g. +91 93404 99553"
-                            />
+                            <div className="relative flex items-center">
+                                <span className="absolute left-4 text-[var(--text-muted)] font-medium">+91</span>
+                                <input
+                                    value={form.phone.replace("+91", "")}
+                                    onChange={e => setForm({ ...form, phone: e.target.value })}
+                                    className="w-full bg-[var(--input-bg)] border border-[var(--input-border)] rounded-lg pl-12 pr-4 py-2.5 text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-green-500/50 focus:border-green-500 transition-all placeholder-[var(--text-muted)]"
+                                    placeholder="98765 43210"
+                                />
+                            </div>
                         </div>
                     </div>
 

@@ -247,7 +247,9 @@ async def whatsapp_webhook(request: Request):
         return {"status": "error", "message": "Voice Transcription Error"}
     
     # --- Phone to UUID Resolution ---
-    extracted_phone = seller_id.replace("whatsapp:", "").replace("+", "")
+    # Twilio sends `whatsapp:+123456789`. Keep the `+` for DB lookups and outbound replies.
+    extracted_phone = seller_id.replace("whatsapp:", "")
+    
     # Attempt to locate the exact seller profile UUID using the phone number
     real_seller_id = get_seller_id_by_phone(extracted_phone)
     if not real_seller_id:
@@ -668,7 +670,7 @@ async def get_profile(seller_id: str, token: Optional[str] = Depends(get_jwt_tok
     profile = get_seller_profile(unquote(seller_id), jwt_token=token)
     return {"profile": profile}
 
-@app.put("/api/seller/{seller_id}/profile", dependencies=[Depends(verify_api_key)])
+@app.put("/api/seller/{seller_id}/profile")
 @limiter.limit("30/minute")
 async def update_profile(request: Request, seller_id: str, profile: SellerProfileUpdate, token: Optional[str] = Depends(get_jwt_token)):
     """Update a seller's profile."""
@@ -680,11 +682,26 @@ async def update_profile(request: Request, seller_id: str, profile: SellerProfil
         "address": profile.address if profile.address is not None else existing.get("address", ""),
         "gst_number": profile.gst_number if profile.gst_number is not None else existing.get("gst_number", ""),
         "logo_url": profile.logo_url if profile.logo_url is not None else existing.get("logo_url", ""),
-        "phone": profile.phone if profile.phone is not None else existing.get("phone", ""),
+        "phone": str(profile.phone).replace(" ", "").replace("-", "") if profile.phone is not None else existing.get("phone", ""),
         "low_stock_alerts": profile.low_stock_alerts if profile.low_stock_alerts is not None else existing.get("low_stock_alerts", False),
     }
     save_seller_profile(clean_id, updated, jwt_token=token)
     log_activity(clean_id, "PROFILE_UPDATED", details=f"Store: {updated['store_name']}", jwt_token=token)
+    
+    # Trigger a WhatsApp welcome message if the phone number was just added OR changed
+    if updated.get("phone") and updated.get("phone") != existing.get("phone"):
+        import asyncio
+        welcome_msg = (
+            f"🎉 *Welcome to ONDC Super Seller, {updated['store_name']}!*\n\n"
+            "Your account is successfully linked! You can now manage your catalog right from WhatsApp using AI.\n\n"
+            "Try replying with:\n"
+            "• \"Add 10 kg atta for 450 rupees\"\n"
+            "• \"Remove Maggi\"\n"
+            "• \"Update rice price to 60 rupees\""
+        )
+        # Send reply asynchronously targeting the E.164 formatted number
+        await asyncio.to_thread(send_whatsapp_reply, f"whatsapp:{updated['phone']}", welcome_msg) # type: ignore
+
     return {"status": "success", "profile": get_seller_profile(clean_id, jwt_token=token)}
 
 # --- Feature 14: Order Management ---
