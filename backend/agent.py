@@ -5,13 +5,32 @@ import uuid
 import os
 import re
 import difflib
+import logging
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from langchain_groq import ChatGroq
 from db import get_catalog, save_catalog
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 GLOBAL_LLM = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.1)
+
+
+def _llm_invoke_with_retry(structured_llm, prompt: str, label: str = "LLM"):
+    """Invoke a structured LLM with retry logic (3 attempts, exponential backoff)."""
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=8),
+        retry=retry_if_exception_type(Exception),
+        before_sleep=lambda retry_state: logger.warning(
+            f"{label} attempt {retry_state.attempt_number} failed, retrying..."
+        ),
+    )
+    def _invoke():
+        return structured_llm.invoke(prompt)
+
+    return _invoke()
 
 class AgentState(TypedDict, total=False):
     raw_whatsapp_input: str
@@ -86,10 +105,10 @@ def classify_intent(state: AgentState) -> Dict[str, Any]:
     """
     
     try:
-        result = structured_llm.invoke(prompt)
+        result = _llm_invoke_with_retry(structured_llm, prompt, label="IntentClassifier")
         intent = getattr(result, 'action', 'UNKNOWN')
     except Exception as e:
-        print(f"Intent classification failed: {e}")
+        logger.error(f"Intent classification failed after retries: {e}")
         raise RuntimeError("LLM_API_ERROR")
         
     print(f"Detected Intent: {intent}")
@@ -114,9 +133,9 @@ def parse_input(state: AgentState) -> Dict[str, Any]:
     """
     
     try:
-        result = structured_llm.invoke(prompt)
+        result = _llm_invoke_with_retry(structured_llm, prompt, label="EntityExtractor")
     except Exception as e:
-        print(f"LLM extraction failed: {e}")
+        logger.error(f"Entity extraction failed after retries: {e}")
         raise RuntimeError("LLM_API_ERROR")
         
     return {
@@ -268,9 +287,11 @@ def update_item(state: AgentState) -> Dict[str, Any]:
     """
     
     try:
-        target = GLOBAL_LLM.with_structured_output(UpdateTarget).invoke(prompt)
+        target = _llm_invoke_with_retry(
+            GLOBAL_LLM.with_structured_output(UpdateTarget), prompt, label="UpdateParser"
+        )
     except Exception as e:
-        print(f"Update intent parsing failed: {e}")
+        logger.error(f"Update intent parsing failed after retries: {e}")
         raise RuntimeError("LLM_API_ERROR")
         
     print(f"UPDATE Target Parsed: {target}")
@@ -313,9 +334,11 @@ def delete_item(state: AgentState) -> Dict[str, Any]:
     prompt = f"User request: {raw_input}\nCurrent inventory: {catalog_context}\nReturn the exact item_id to delete."
     
     try:
-        target = GLOBAL_LLM.with_structured_output(DeleteTarget).invoke(prompt)
+        target = _llm_invoke_with_retry(
+            GLOBAL_LLM.with_structured_output(DeleteTarget), prompt, label="DeleteParser"
+        )
     except Exception as e:
-        print(f"Delete intent parsing failed: {e}")
+        logger.error(f"Delete intent parsing failed after retries: {e}")
         raise RuntimeError("LLM_API_ERROR")
         
     print(f"DELETE Target Parsed: {target}")

@@ -8,19 +8,23 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from dotenv import dotenv_values
+
 class VoiceProcessor:
     def __init__(self):
-        self.groq_client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
-        self.twilio_sid = os.getenv("TWILIO_ACCOUNT_SID")
-        self.twilio_auth = os.getenv("TWILIO_AUTH_TOKEN")
+        pass
 
     def _download_twilio_media_sync(self, media_url: str, output_path: str):
-        if not self.twilio_sid or not self.twilio_auth:
+        env = dotenv_values(".env")
+        twilio_sid = env.get("TWILIO_ACCOUNT_SID")
+        twilio_auth = env.get("TWILIO_AUTH_TOKEN")
+        
+        if not twilio_sid or not twilio_auth:
             raise ValueError("Missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN")
             
         response = requests.get(
             media_url, 
-            auth=HTTPBasicAuth(self.twilio_sid, self.twilio_auth),
+            auth=HTTPBasicAuth(twilio_sid, twilio_auth),
             stream=True
         )
         
@@ -39,8 +43,14 @@ class VoiceProcessor:
             await asyncio.to_thread(self._download_twilio_media_sync, media_url, temp_filename)
             
             # Step 2: Transcribe using Whisper
+            env = dotenv_values(".env")
+            groq_key = env.get("GROQ_API_KEY")
+            if not groq_key:
+                raise ValueError("Missing GROQ_API_KEY in .env")
+                
+            groq_client = AsyncGroq(api_key=groq_key)
             with open(temp_filename, "rb") as audio_file:
-                transcription = await self.groq_client.audio.transcriptions.create(
+                transcription = await groq_client.audio.transcriptions.create(
                     file=("audio.ogg", audio_file.read()),
                     model="whisper-large-v3",
                 )

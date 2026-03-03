@@ -61,7 +61,9 @@ def get_catalog(seller_id: str, jwt_token: str = None) -> dict:
     return catalog
 
 def save_catalog(seller_id: str, catalog_json: dict, jwt_token: str = None):
-    """Takes a full ONDC Beckn catalog and syncs it with the `products` table."""
+    """Takes a full ONDC Beckn catalog and syncs it with the `products` table.
+    Uses a granular diff: upserts changed/new items, deletes removed items.
+    This preserves product UUIDs and avoids unnecessary DB churn."""
     ensure_profile_exists(seller_id, jwt_token)
     sb = get_supabase_client(jwt_token)
     
@@ -70,24 +72,35 @@ def save_catalog(seller_id: str, catalog_json: dict, jwt_token: str = None):
     except (KeyError, IndexError):
         items = []
     
-    # We will delete all current products for this seller and insert the new ones.
-    # Note: A real production system might prefer fine-grained upserts without deleting,
-    # but since the agent manipulates the entire JSON array, full sync is safest.
+    # Build the list of items to upsert
+    new_ids = set()
+    inserts = []
+    for item in items:
+        item_id = item.get("id")
+        if item_id:
+            new_ids.add(item_id)
+        inserts.append({
+            "id": item_id or str(__import__('uuid').uuid4()),
+            "seller_id": seller_id,
+            "name": item["descriptor"]["name"],
+            "price": float(item["price"]["value"]),
+            "quantity": int(item["quantity"]["available"]["count"]),
+            "category_id": item.get("category_id", "Grocery"),
+            "unit": item.get("unit", "")
+        })
+    
     try:
-        sb.table("products").delete().eq("seller_id", seller_id).execute()
+        # Fetch existing product IDs for this seller
+        existing_resp = sb.table("products").select("id").eq("seller_id", seller_id).execute()
+        existing_ids = {row["id"] for row in (existing_resp.data or [])}
         
-        if items:
-            inserts = []
-            for item in items:
-                inserts.append({
-                    "id": item.get("id"),
-                    "seller_id": seller_id,
-                    "name": item["descriptor"]["name"],
-                    "price": float(item["price"]["value"]),
-                    "quantity": int(item["quantity"]["available"]["count"]),
-                    "category_id": item.get("category_id", "Grocery"),
-                    "unit": item.get("unit", "")
-                })
+        # Delete items that are no longer in the catalog
+        ids_to_delete = existing_ids - new_ids
+        if ids_to_delete:
+            sb.table("products").delete().in_("id", list(ids_to_delete)).execute()
+        
+        # Upsert all current items (handles both inserts and updates)
+        if inserts:
             sb.table("products").upsert(inserts).execute()
     except Exception as e:
         print(f"Supabase save_catalog Error: {e}")
