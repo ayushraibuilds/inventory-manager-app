@@ -24,7 +24,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
 
     useEffect(() => {
+        const DEV_MODE = process.env.NEXT_PUBLIC_DEV_MODE === "true";
+
         const initSession = async () => {
+            // Dev bypass: skip Supabase auth entirely
+            if (DEV_MODE) {
+                console.log("🔓 DEV MODE: Auth bypassed — using mock session");
+                setToken("dev-mock-token");
+                setSellerId(process.env.NEXT_PUBLIC_DEV_SELLER_ID || "dev-seller-001");
+                setIsLoading(false);
+                return;
+            }
+
             const { data: { session } } = await supabase.auth.getSession();
             if (session) {
                 setToken(session.access_token);
@@ -33,6 +44,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setIsLoading(false);
         };
         initSession();
+
+        if (DEV_MODE) return; // Skip auth listener in dev mode
 
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
             if (session) {

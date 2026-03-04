@@ -37,8 +37,11 @@ class AgentState(TypedDict, total=False):
     seller_id: str
     intent: str
     translated_text: str
+    detected_language: str
+    conversation_history: list
     extracted_product_entities: Any
     ondc_beckn_json: Dict[str, Any]
+    faq_answer: str
 
 class ProductEntity(BaseModel):
     name: str = Field(description="The name of the product or item.")
@@ -51,8 +54,8 @@ class CatalogExtraction(BaseModel):
     items: List[ProductEntity] = Field(description="A list of all products mentioned in the message.")
 
 class IntentClassifier(BaseModel):
-    action: Literal["ADD", "UPDATE", "DELETE", "UNKNOWN"] = Field(
-        description="The goal of the shopkeeper's message. ADD if listing new items. UPDATE if changing existing items' price/stock. DELETE if removing an item or saying it is out of stock. UNKNOWN if unclear."
+    action: Literal["ADD", "UPDATE", "DELETE", "FAQ", "UNKNOWN"] = Field(
+        description="The goal of the shopkeeper's message. ADD if listing new items. UPDATE if changing existing items' price/stock. DELETE if removing an item or saying it is out of stock. FAQ if asking a question about how to use the system, pricing, or ONDC. UNKNOWN if unclear."
     )
 
 class DeleteTarget(BaseModel):
@@ -86,22 +89,59 @@ def sanitize_product(item: Any) -> Any:
             item.quantity_value = 0
     return item
 
+# --- Language hints appended to LLM prompts per detected language ---
+LANG_HINTS = {
+    "hi": "\n\nLANGUAGE CONTEXT: The user speaks Hindi/Hinglish. Keywords: 'rakh do'=set/add, 'hata do'=remove, 'badal do'=change, 'karo'=do, 'chahiye'=need, 'wala'=of/with.",
+    "en": "\n\nLANGUAGE CONTEXT: The user speaks English.",
+    "ta": "\n\nLANGUAGE CONTEXT: The user speaks Tamil. Keywords: 'add pannunga'=add, 'neekkuunga'=remove.",
+    "te": "\n\nLANGUAGE CONTEXT: The user speaks Telugu.",
+    "kn": "\n\nLANGUAGE CONTEXT: The user speaks Kannada.",
+    "bn": "\n\nLANGUAGE CONTEXT: The user speaks Bengali.",
+}
+
+def _format_conversation_context(history: list) -> str:
+    """Format conversation history as a prompt prefix."""
+    if not history:
+        return ""
+    lines = []
+    for turn in history:
+        role = turn.get("role", "user")
+        content = turn.get("content", "")
+        prefix = "Seller" if role == "user" else "Assistant"
+        lines.append(f"{prefix}: {content}")
+    return "Recent conversation:\n" + "\n".join(lines) + "\n\n"
+
+def detect_language(state: AgentState) -> Dict[str, Any]:
+    """LangGraph node: detect the language of the incoming message."""
+    from lang_detect import detect
+    text = state.get("raw_whatsapp_input", "")
+    result = detect(text)
+    logger.info(f"Language detected: {result.lang_code} (method={result.method}, confidence={result.confidence})")
+    return {"detected_language": result.lang_code}
+
 def classify_intent(state: AgentState) -> Dict[str, Any]:
     text = state.get("raw_whatsapp_input", "")
+    lang = state.get("detected_language", "en")
+    history = state.get("conversation_history", [])
     
     structured_llm = GLOBAL_LLM.with_structured_output(IntentClassifier)
+    
+    context = _format_conversation_context(history)
+    lang_hint = LANG_HINTS.get(lang, "")
     
     prompt = f"""
     You are an intent classifier for a shopkeeper inventory system.
     Analyze the following message and determine the user's intent.
     
-    Message: "{text}"
+    {context}Message: "{text}"
     
     Rules:
     - ADD: ALWAYS use this for terms like "rakh do", "set karo", "laga do", "aa gaye hain", or "add". Because ADD has smart upsert logic, always prefer ADD when the user is setting a price or listing stock.
     - UPDATE: ONLY use this if explicitly asked to specifically 'modify', 'change', or 'update' an existing item without mentioning full inventory listing.
     - DELETE: Triggered STRICTLY by terms like "hata do", "remove", "delete", "khatam ho gaya", "nikal do". ONLY use DELETE if they are completely removing an item or it is perfectly out of stock.
+    - FAQ: Use this if the user is asking a question like "how to use", "kaise karu", "help", "pricing", "ONDC kya hai", or any general question not about managing inventory.
     - If it's none of the above, intent is UNKNOWN.
+    {lang_hint}
     """
     
     try:
@@ -116,13 +156,19 @@ def classify_intent(state: AgentState) -> Dict[str, Any]:
 
 def parse_input(state: AgentState) -> Dict[str, Any]:
     text = state.get("raw_whatsapp_input", "")
+    lang = state.get("detected_language", "en")
+    history = state.get("conversation_history", [])
     
     # LLM based extraction using global Ollama model
     structured_llm = GLOBAL_LLM.with_structured_output(CatalogExtraction)
     
+    context = _format_conversation_context(history)
+    lang_hint = LANG_HINTS.get(lang, "")
+    
     prompt = f"""
     Extract the product inventory details from the following message from a shopkeeper:
-    "{text}"
+    
+    {context}Message: "{text}"
     
     CRITICAL INSTRUCTIONS FOR HINGLISH:
     - If a unit is not explicitly mentioned, assume "piece".
@@ -130,6 +176,22 @@ def parse_input(state: AgentState) -> Dict[str, Any]:
     - E.g. "25 kilo wali 4 bori" -> The product is "25 kilo bori", the quantity is 4, unit is "bori" (or sack). Do NOT set quantity to 25.
     - Clean up misspellings dynamically (e.g. "namk" -> "salt" or "namak", "pkt" -> "packet").
     - VERY IMPORTANT: For `price_inr`, ONLY extract pure numbers. Strip all symbols like $, >=, rupees, or letters. Just the number (e.g. "14").
+    
+    CATEGORIZATION RULES (use these to assign category_id accurately):
+    - "Grocery": rice, atta, dal, oil, sugar, salt, spices, dry fruits, packaged staples, flour, ghee
+    - "F&B": ready-to-eat (Maggi, noodles), beverages (Coke, juice, tea, coffee), snacks (chips, biscuits, namkeen), bakery, dairy (milk, curd, paneer), frozen meals
+    - "Health & Wellness": medicines, supplements, sanitizers, masks, handwash, first aid, vitamins
+    - "Beauty & Personal Care": soap, shampoo, cosmetics, skincare, toothpaste, deodorant, hair oil
+    - "Home & Decor": cleaning supplies (Harpic, Lizol, detergent), utensils, bedding, mops, brooms
+    - "Electronics": chargers, earphones, bulbs, batteries, cables, adapters
+    - Default to "Grocery" ONLY if no other category clearly fits.
+    
+    BULK INPUT RULES:
+    - If the message lists many items separated by commas, "aur", "and", or newlines, extract ALL of them as separate items.
+    - Example: "atta 450, dal 120, chawal 80, maggi 60" → 4 separate items
+    - Do NOT merge items. Each product gets its own entry with its own price/quantity.
+    - For very long lists, extract every single item mentioned. Do not summarize or skip any.
+    {lang_hint}
     """
     
     try:
@@ -357,15 +419,38 @@ def delete_item(state: AgentState) -> Dict[str, Any]:
 def route_intent(state: AgentState) -> str:
     return str(state.get("intent", "UNKNOWN"))
 
+def handle_faq(state: AgentState) -> Dict[str, Any]:
+    """LangGraph node: handle FAQ/support queries."""
+    from reply_templates import get_faq_answer
+    
+    text = state.get("raw_whatsapp_input", "").lower()
+    lang = state.get("detected_language", "en")
+    
+    # Simple keyword matching for FAQ topics
+    if any(w in text for w in ["how to", "kaise", "use", "istamaal", "istemal"]):
+        topic = "how_to_use"
+    elif any(w in text for w in ["price", "pricing", "cost", "paisa", "kitna", "charge", "free"]):
+        topic = "pricing"
+    elif any(w in text for w in ["ondc", "what is", "kya hai"]):
+        topic = "ondc"
+    else:
+        topic = "help"
+    
+    answer = get_faq_answer(lang, topic)
+    return {"faq_answer": answer, "translated_text": answer}
+
 # Build graph
 builder = StateGraph(AgentState)
+builder.add_node("detect_language", detect_language)
 builder.add_node("classify_intent", classify_intent)
 builder.add_node("parse_input", parse_input)
 builder.add_node("generate_beckn_catalog", generate_beckn_catalog)
 builder.add_node("update_item", update_item)
 builder.add_node("delete_item", delete_item)
+builder.add_node("handle_faq", handle_faq)
 
-builder.add_edge(START, "classify_intent")
+builder.add_edge(START, "detect_language")
+builder.add_edge("detect_language", "classify_intent")
 
 builder.add_conditional_edges(
     "classify_intent",
@@ -374,20 +459,26 @@ builder.add_conditional_edges(
         "ADD": "parse_input",
         "UPDATE": "update_item",
         "DELETE": "delete_item",
+        "FAQ": "handle_faq",
         "UNKNOWN": END
     }
 )
 
 builder.add_edge("update_item", END)
 builder.add_edge("delete_item", END)
+builder.add_edge("handle_faq", END)
 builder.add_edge("parse_input", "generate_beckn_catalog")
 builder.add_edge("generate_beckn_catalog", END)
 
 graph = builder.compile()
 
-def process_whatsapp_message(message: str, seller_id: str = "unknown_seller") -> Dict[str, Any]:
+def process_whatsapp_message(message: str, seller_id: str = "unknown_seller", conversation_history: list = None) -> Dict[str, Any]:
     """Process an incoming WhatsApp message through the LangGraph state machine"""
-    initial_state: AgentState = {"raw_whatsapp_input": message, "seller_id": seller_id}
+    initial_state: AgentState = {
+        "raw_whatsapp_input": message,
+        "seller_id": seller_id,
+        "conversation_history": conversation_history or [],
+    }
     final_state = graph.invoke(initial_state)
     return final_state
 

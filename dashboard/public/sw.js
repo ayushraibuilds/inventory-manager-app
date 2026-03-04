@@ -1,15 +1,7 @@
-const CACHE_NAME = 'ondc-super-seller-v1';
-const STATIC_ASSETS = [
-    '/',
-    '/analytics',
-    '/orders',
-    '/import'
-];
+const CACHE_NAME = 'ondc-super-seller-v2';
 
 self.addEventListener('install', (event) => {
-    event.waitUntil(
-        caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
-    );
+    // Skip pre-caching in dev — auth-protected routes would fail
     self.skipWaiting();
 });
 
@@ -30,8 +22,11 @@ self.addEventListener('fetch', (event) => {
         event.respondWith(
             fetch(event.request)
                 .then((res) => {
-                    const clone = res.clone();
-                    caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+                    // Only cache successful responses
+                    if (res.status === 200) {
+                        const clone = res.clone();
+                        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+                    }
                     return res;
                 })
                 .catch(() => caches.match(event.request))
@@ -39,8 +34,10 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // Cache-first for static assets
-    event.respondWith(
-        caches.match(event.request).then((cached) => cached || fetch(event.request))
-    );
+    // Network-first for pages, cache-first for static assets
+    if (event.request.url.includes('/_next/static/')) {
+        event.respondWith(
+            caches.match(event.request).then((cached) => cached || fetch(event.request))
+        );
+    }
 });

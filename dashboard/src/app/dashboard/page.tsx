@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
 import { Toaster, toast } from "sonner";
-import { Activity, Truck, LogOut, BarChart3, User, ShoppingCart, Upload } from "lucide-react";
+import { Activity, Truck, LogOut, BarChart3, User, ShoppingCart, Upload, DollarSign, Download, Wifi, WifiOff } from "lucide-react";
 import Link from "next/link";
 import StatCards from "../../components/StatCards";
 import InventoryTable, { CatalogItem } from "../../components/InventoryTable";
@@ -47,6 +47,17 @@ export default function Dashboard() {
     unit: "piece",
     category_id: "Grocery"
   });
+
+  // ONDC Status
+  const [ondcStatus, setOndcStatus] = useState<"loading" | "sandbox_ready" | "offline">("loading");
+  const [ondcSellers, setOndcSellers] = useState(0);
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/v1/ondc/status`)
+      .then(r => r.json())
+      .then(d => { setOndcStatus(d.status || "offline"); setOndcSellers(d.registered_sellers || 0); })
+      .catch(() => setOndcStatus("offline"));
+  }, []);
 
   const fetchCatalog = useCallback(async (showToast = false, page = currentPage) => {
     if (!activeSellerId) return;
@@ -318,6 +329,15 @@ export default function Dashboard() {
             Analytics
           </Link>
 
+          {/* Price Intelligence Link */}
+          <Link
+            href="/price-check"
+            className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/20 text-amber-400 px-4 py-1.5 rounded-full font-semibold text-sm hover:bg-amber-500/20 transition-all"
+          >
+            <DollarSign className="w-3.5 h-3.5" />
+            Pricing
+          </Link>
+
           {/* Orders Link */}
           <Link
             href="/orders"
@@ -335,6 +355,22 @@ export default function Dashboard() {
             <Upload className="w-3.5 h-3.5" />
             Import
           </Link>
+
+          {/* CSV Export */}
+          <button
+            onClick={() => {
+              const url = `${API_URL}/api/catalog/export/csv?seller_id=${encodeURIComponent(activeSellerId)}`;
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = "catalog.csv";
+              a.click();
+              toast.success("Downloading catalog CSV...");
+            }}
+            className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-4 py-1.5 rounded-full font-semibold text-sm hover:bg-emerald-500/20 transition-all"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Export
+          </button>
 
           {/* Seller Profile Link */}
           <Link
@@ -354,16 +390,38 @@ export default function Dashboard() {
             Logout
           </button>
 
+          {/* ONDC Status Widget */}
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="flex items-center gap-2 bg-green-500/10 border border-green-500/20 text-green-400 px-4 py-1.5 rounded-full font-semibold text-sm shadow-sm backdrop-blur-md"
+            className={`flex items-center gap-2 px-4 py-1.5 rounded-full font-semibold text-sm shadow-sm backdrop-blur-md border ${ondcStatus === "sandbox_ready"
+                ? "bg-green-500/10 border-green-500/20 text-green-400"
+                : ondcStatus === "loading"
+                  ? "bg-yellow-500/10 border-yellow-500/20 text-yellow-400"
+                  : "bg-red-500/10 border-red-500/20 text-red-400"
+              }`}
+            title={ondcStatus === "sandbox_ready" ? `${ondcSellers} seller(s) registered on ONDC Sandbox` : "ONDC network offline"}
           >
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500"></span>
-            </span>
-            Network Live
+            {ondcStatus === "sandbox_ready" ? (
+              <>
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500"></span>
+                </span>
+                <Wifi className="w-3 h-3" />
+                ONDC Sandbox
+              </>
+            ) : ondcStatus === "loading" ? (
+              <>
+                <span className="animate-spin h-3 w-3 border-2 border-yellow-400 border-t-transparent rounded-full" />
+                Connecting...
+              </>
+            ) : (
+              <>
+                <WifiOff className="w-3 h-3" />
+                ONDC Offline
+              </>
+            )}
           </motion.div>
 
           <ThemeToggle />

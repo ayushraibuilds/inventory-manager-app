@@ -13,3 +13,4 @@ pytest
 supabase
 requests
 tenacity
+langdetect

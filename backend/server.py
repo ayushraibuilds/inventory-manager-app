@@ -127,6 +127,7 @@ from routes.webhook import router as webhook_router
 from routes.catalog import router as catalog_router, v1_router as catalog_v1_router
 from routes.orders import router as orders_router, v1_router as orders_v1_router
 from routes.sellers import router as sellers_router, v1_router as sellers_v1_router
+from routes.ondc import router as ondc_router
 
 # Backward-compatible /api/* paths
 app.include_router(webhook_router)
@@ -138,3 +139,6 @@ app.include_router(sellers_router)
 app.include_router(catalog_v1_router)
 app.include_router(orders_v1_router)
 app.include_router(sellers_v1_router)
+
+# ONDC sandbox endpoints
+app.include_router(ondc_router)

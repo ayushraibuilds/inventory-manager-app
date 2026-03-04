@@ -1,10 +1,24 @@
 import os
 import json
+import time
 from datetime import datetime
 from supabase import create_client, Client, ClientOptions
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 
-from dotenv import dotenv_values
+# --- Cached env loader ---
+_env_cache = None
+_env_cache_ts = 0
+_ENV_TTL = 30  # seconds
+
+def _get_env():
+    global _env_cache, _env_cache_ts
+    now = time.time()
+    # Simple timestamp check - no locks to avoid async deadlocks under load
+    if _env_cache is None or (now - _env_cache_ts > _ENV_TTL):
+        _env_cache = dotenv_values(".env")
+        _env_cache_ts = now
+    return _env_cache
+
 
 def get_supabase_client(jwt_token: str = None) -> Client:
     """
@@ -12,11 +26,14 @@ def get_supabase_client(jwt_token: str = None) -> Client:
     If a user JWT is provided, requests will be authenticated as that user (respecting RLS).
     If no JWT is provided, falls back to the service_role key.
     """
-    # Dynamically read `.env` bypassing static os.environ cache during hot-reloads
-    env_vars = dotenv_values(".env")
+    env_vars = _get_env()
     url = env_vars.get("SUPABASE_URL", "")
     anon = env_vars.get("SUPABASE_ANON_KEY", "")
     service = env_vars.get("SUPABASE_SERVICE_ROLE_KEY", "")
+
+    # Dev bypass: treat mock token as unauthenticated (use service role)
+    if jwt_token and jwt_token.startswith("dev-mock"):
+        jwt_token = None
     
     if jwt_token:
         options = ClientOptions(headers={"Authorization": f"Bearer {jwt_token}"})
@@ -141,6 +158,37 @@ def get_activity_logs(limit: int = 50, seller_id: str = "", jwt_token: str = Non
         query = query.eq("seller_id", seller_id)
     response = query.order("id", desc=True).limit(limit).execute()
     return response.data if response.data else []
+
+def get_conversation_history(seller_id: str, limit: int = 3, jwt_token: str = None) -> list:
+    """Retrieve the last N WhatsApp turns for a seller from the activity log.
+    Returns [{role: "user"|"assistant", content: str}, ...]
+    """
+    sb = get_supabase_client(jwt_token)
+    try:
+        response = (
+            sb.table("activity_log")
+            .select("action, details")
+            .eq("seller_id", seller_id)
+            .in_("action", ["WHATSAPP_RECEIVED", "WHATSAPP_SENT"])
+            .order("id", desc=True)
+            .limit(limit * 2)  # fetch extra to ensure we get full turns
+            .execute()
+        )
+        if not response.data:
+            return []
+
+        history = []
+        for row in reversed(response.data):  # oldest first
+            role = "user" if row["action"] == "WHATSAPP_RECEIVED" else "assistant"
+            content = row.get("details", "")
+            if content:
+                history.append({"role": role, "content": content[:300]})  # cap length
+
+        return history[-limit * 2:]  # at most limit pairs
+    except Exception as e:
+        print(f"get_conversation_history error: {e}")
+        return []
+
 
 # --- Seller Profiles ---
 def ensure_profile_exists(seller_id: str, jwt_token: str = None):

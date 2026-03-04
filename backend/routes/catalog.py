@@ -776,6 +776,128 @@ async def health_check():
     return result
 
 
+@router.get("/catalog/price-check")
+async def price_check_catalog(seller_id: str, token: str = Depends(get_jwt_token)):
+    """Return price intelligence for all items in a seller's catalog."""
+    from price_reference import get_catalog_price_report
+
+    catalog = get_catalog(seller_id, token)
+    try:
+        items = catalog["bpp/catalog"]["bpp/providers"][0].get("items", [])
+    except (KeyError, IndexError):
+        items = []
+
+    if not items:
+        return {"seller_id": seller_id, "total_items": 0, "suggestions": []}
+
+    suggestions = get_catalog_price_report(items)
+
+    return {
+        "seller_id": seller_id,
+        "total_items": len(items),
+        "items_with_suggestions": len(suggestions),
+        "suggestions": suggestions,
+    }
+
+
+# --- CSV Export ---
+
+@router.get("/api/catalog/export/csv")
+async def export_catalog_csv(seller_id: str, token: str = Depends(get_jwt_token)):
+    """Export the full catalog as a downloadable CSV file."""
+    import csv
+    import io
+    from fastapi.responses import StreamingResponse
+
+    catalog = get_catalog(seller_id, token)
+    try:
+        items = catalog["bpp/catalog"]["bpp/providers"][0].get("items", [])
+    except (KeyError, IndexError):
+        items = []
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Name", "Price (INR)", "Quantity", "Unit", "Category"])
+
+    for item in items:
+        desc = item.get("descriptor", {})
+        price = item.get("price", {})
+        qty = item.get("quantity", {}).get("available", {}).get("count", 0)
+        unit = ""
+        if desc.get("short_desc"):
+            parts = desc["short_desc"].split(" ")
+            if len(parts) > 1:
+                unit = parts[1]
+        writer.writerow([
+            desc.get("name", "Unknown"),
+            price.get("value", "0"),
+            qty,
+            unit or "piece",
+            item.get("category_id", "Grocery"),
+        ])
+
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="catalog_{seller_id[:8]}.csv"'},
+    )
+
+
+# --- Batch Price Update ---
+
+class BatchPriceItem(BaseModel):
+    item_id: str
+    new_price: str
+
+
+class BatchPriceUpdate(BaseModel):
+    seller_id: str
+    updates: List[BatchPriceItem]
+
+
+@router.post("/api/catalog/batch-price-update")
+@limiter.limit("10/minute")
+async def batch_price_update(request: Request, data: BatchPriceUpdate, token: str = Depends(get_jwt_token)):
+    """Update prices for multiple items at once (e.g. match market prices)."""
+    catalog = get_catalog(data.seller_id, jwt_token=token)
+    try:
+        items = catalog["bpp/catalog"]["bpp/providers"][0].get("items", [])
+    except (KeyError, IndexError, TypeError):
+        raise HTTPException(status_code=404, detail="Catalog not found")
+
+    # Build lookup of price updates
+    price_map = {}
+    for u in data.updates:
+        price_val = re.sub(r"[^0-9.]", "", str(u.new_price))
+        if price_val and float(price_val) > 0:
+            price_map[u.item_id] = price_val
+
+    updated = 0
+    for item in items:
+        if isinstance(item, dict) and item.get("id") in price_map:
+            if "price" not in item:
+                item["price"] = {"currency": "INR", "value": "0"}
+            item["price"]["value"] = price_map[item["id"]]
+            updated += 1
+
+    if updated > 0:
+        catalog["bpp/catalog"]["bpp/providers"][0]["items"] = items
+        save_catalog(data.seller_id, catalog, jwt_token=token)
+        log_activity(
+            data.seller_id,
+            "BATCH_PRICE_UPDATE",
+            f"{updated} items",
+            f"Updated {updated} prices to market rates",
+            jwt_token=token,
+        )
+
+    return {
+        "updated": updated,
+        "total_requested": len(data.updates),
+    }
+
+
 # --- Register all route handler functions on v1_router as well ---
 # We bind each handler directly to both /api/* and /api/v1/* by re-using
 # the same async function with v1_router decorators.
@@ -785,6 +907,9 @@ v1_router.get("/catalog/stream")(catalog_stream)
 v1_router.get("/sellers")(list_sellers)
 v1_router.get("/activity")(get_activity)
 v1_router.get("/analytics")(get_analytics)
+v1_router.get("/catalog/price-check")(price_check_catalog)
+v1_router.get("/catalog/export/csv")(export_catalog_csv)
+v1_router.post("/catalog/batch-price-update")(batch_price_update)
 v1_router.post("/catalog/item", dependencies=[Depends(verify_api_key)])(create_item)
 v1_router.put("/catalog/item/{item_id}", dependencies=[Depends(verify_api_key)])(update_item)
 v1_router.delete("/catalog/item/{item_id}", dependencies=[Depends(verify_api_key)])(delete_item)
