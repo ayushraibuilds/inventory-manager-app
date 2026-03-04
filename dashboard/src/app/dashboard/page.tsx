@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
 import { Toaster, toast } from "sonner";
-import { Activity, Truck, LogOut, BarChart3, User, ShoppingCart, Upload, DollarSign, Download, Wifi, WifiOff } from "lucide-react";
+import { Activity, Truck, LogOut, BarChart3, User, ShoppingCart, Upload, DollarSign, Download, Wifi, WifiOff, FileText } from "lucide-react";
 import Link from "next/link";
 import StatCards from "../../components/StatCards";
 import InventoryTable, { CatalogItem } from "../../components/InventoryTable";
@@ -11,6 +11,8 @@ import ProductModal from "../../components/ProductModal";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import ActivityLog from "../../components/ActivityLog";
 import ThemeToggle from "../../components/ThemeToggle";
+import NotificationCenter from "../../components/NotificationCenter";
+import LangToggle from "../../components/LangToggle";
 import { useAuth } from "@/components/AuthProvider";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -395,10 +397,10 @@ export default function Dashboard() {
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             className={`flex items-center gap-2 px-4 py-1.5 rounded-full font-semibold text-sm shadow-sm backdrop-blur-md border ${ondcStatus === "sandbox_ready"
-                ? "bg-green-500/10 border-green-500/20 text-green-400"
-                : ondcStatus === "loading"
-                  ? "bg-yellow-500/10 border-yellow-500/20 text-yellow-400"
-                  : "bg-red-500/10 border-red-500/20 text-red-400"
+              ? "bg-green-500/10 border-green-500/20 text-green-400"
+              : ondcStatus === "loading"
+                ? "bg-yellow-500/10 border-yellow-500/20 text-yellow-400"
+                : "bg-red-500/10 border-red-500/20 text-red-400"
               }`}
             title={ondcStatus === "sandbox_ready" ? `${ondcSellers} seller(s) registered on ONDC Sandbox` : "ONDC network offline"}
           >
@@ -424,6 +426,17 @@ export default function Dashboard() {
             )}
           </motion.div>
 
+          {/* Logs Link */}
+          <Link
+            href="/logs"
+            className="flex items-center gap-2 bg-green-500/10 border border-green-500/20 text-green-400 px-4 py-1.5 rounded-full font-semibold text-sm hover:bg-green-500/20 transition-all"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            Logs
+          </Link>
+
+          <NotificationCenter />
+          <LangToggle />
           <ThemeToggle />
         </div>
       </header>

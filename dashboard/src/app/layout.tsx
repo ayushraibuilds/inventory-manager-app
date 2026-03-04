@@ -31,8 +31,11 @@ export default function RootLayout({
             dangerouslySetInnerHTML={{
               __html: `
               if ('serviceWorker' in navigator) {
-                window.addEventListener('load', () => {
-                  navigator.serviceWorker.register('/sw.js').catch(() => {});
+                navigator.serviceWorker.getRegistrations().then(function(regs) {
+                  regs.forEach(function(r) { r.unregister(); });
+                });
+                caches.keys().then(function(keys) {
+                  keys.forEach(function(k) { caches.delete(k); });
                 });
               }
             `

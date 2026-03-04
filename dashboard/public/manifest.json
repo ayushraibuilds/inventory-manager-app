@@ -1,12 +1,18 @@
 {
     "name": "ONDC Super Seller",
     "short_name": "Super Seller",
-    "description": "Manage your ONDC catalog via WhatsApp",
-    "start_url": "/",
+    "description": "Manage your ONDC catalog via WhatsApp — voice notes, images, and text in Hindi & English",
+    "start_url": "/dashboard",
+    "scope": "/",
     "display": "standalone",
     "background_color": "#0d1117",
     "theme_color": "#58a6ff",
     "orientation": "portrait-primary",
+    "categories": [
+        "business",
+        "productivity"
+    ],
+    "screenshots": [],
     "icons": [
         {
             "src": "/icon-192.png",
@@ -19,6 +25,41 @@
             "sizes": "512x512",
             "type": "image/png",
             "purpose": "any maskable"
+        }
+    ],
+    "shortcuts": [
+        {
+            "name": "Dashboard",
+            "short_name": "Dash",
+            "url": "/dashboard",
+            "icons": [
+                {
+                    "src": "/icon-192.png",
+                    "sizes": "192x192"
+                }
+            ]
+        },
+        {
+            "name": "Price Check",
+            "short_name": "Prices",
+            "url": "/price-check",
+            "icons": [
+                {
+                    "src": "/icon-192.png",
+                    "sizes": "192x192"
+                }
+            ]
+        },
+        {
+            "name": "Orders",
+            "short_name": "Orders",
+            "url": "/orders",
+            "icons": [
+                {
+                    "src": "/icon-192.png",
+                    "sizes": "192x192"
+                }
+            ]
         }
     ]
 }

@@ -9,7 +9,8 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 interface ActivityEntry {
     id: number;
-    timestamp: string;
+    timestamp?: string;
+    created_at?: string;
     seller_id: string;
     action: string;
     item_name: string;
@@ -38,14 +39,21 @@ const ACTION_LABELS: Record<string, string> = {
     UNKNOWN_INTENT: "Unknown",
 };
 
-function timeAgo(timestamp: string): string {
-    const diff = Date.now() - new Date(timestamp + "Z").getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return "just now";
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    return `${Math.floor(hrs / 24)}d ago`;
+function timeAgo(timestamp: string | undefined): string {
+    if (!timestamp) return "";
+    try {
+        const date = new Date(timestamp);
+        if (isNaN(date.getTime())) return "";
+        const diff = Date.now() - date.getTime();
+        const mins = Math.floor(diff / 60000);
+        if (mins < 1) return "just now";
+        if (mins < 60) return `${mins}m ago`;
+        const hrs = Math.floor(mins / 60);
+        if (hrs < 24) return `${hrs}h ago`;
+        return `${Math.floor(hrs / 24)}d ago`;
+    } catch {
+        return "";
+    }
 }
 
 interface ActivityLogProps {
@@ -114,7 +122,7 @@ export default function ActivityLog({ selectedSeller }: ActivityLogProps) {
                                         <span className="text-xs font-semibold text-[var(--text-primary)]">
                                             {ACTION_LABELS[log.action] || log.action}
                                         </span>
-                                        <span className="text-xs text-[var(--text-muted)]">{timeAgo(log.timestamp)}</span>
+                                        <span className="text-xs text-[var(--text-muted)]">{timeAgo(log.created_at || log.timestamp)}</span>
                                     </div>
                                     <p className="text-xs text-[var(--text-secondary)] truncate mt-0.5">
                                         {log.item_name || log.details || "—"}

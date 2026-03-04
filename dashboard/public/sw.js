@@ -1,7 +1,6 @@
-const CACHE_NAME = 'ondc-super-seller-v2';
+const CACHE_NAME = 'ondc-super-seller-v3';
 
 self.addEventListener('install', (event) => {
-    // Skip pre-caching in dev — auth-protected routes would fail
     self.skipWaiting();
 });
 
@@ -17,27 +16,22 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
     if (event.request.method !== 'GET') return;
 
-    // Network-first for API calls
-    if (event.request.url.includes('/api/')) {
+    // Never intercept API calls — let them go straight to the network.
+    // This prevents Cache.put() errors from opaque/streaming responses.
+    if (event.request.url.includes('/api/')) return;
+
+    // Cache-first for static assets only
+    if (event.request.url.includes('/_next/static/')) {
         event.respondWith(
-            fetch(event.request)
-                .then((res) => {
-                    // Only cache successful responses
-                    if (res.status === 200) {
+            caches.match(event.request).then((cached) =>
+                cached || fetch(event.request).then((res) => {
+                    if (res.ok) {
                         const clone = res.clone();
                         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
                     }
                     return res;
                 })
-                .catch(() => caches.match(event.request))
-        );
-        return;
-    }
-
-    // Network-first for pages, cache-first for static assets
-    if (event.request.url.includes('/_next/static/')) {
-        event.respondWith(
-            caches.match(event.request).then((cached) => cached || fetch(event.request))
+            )
         );
     }
 });
