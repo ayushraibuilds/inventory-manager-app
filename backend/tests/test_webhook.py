@@ -12,7 +12,8 @@ class TestWebhookEndpoint:
         from server import app
         return TestClient(app)
 
-    def test_webhook_no_body_returns_response(self, client):
+    @patch("routes.webhook.verify_twilio_signature", return_value=True)
+    def test_webhook_no_body_returns_response(self, mock_sig, client):
         """Empty POST still returns a response (Twilio expects one)."""
         res = client.post("/whatsapp-webhook", data={})
         # May be 200 (twiml) or 422 (validation) — either is acceptable
