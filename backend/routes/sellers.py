@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+from schemas import SellerProfileResponse, SellerProfileUpdateResponse
 from routes.auth import get_jwt_token, send_whatsapp_reply
 from db import save_seller_profile, get_seller_profile, log_activity
 
@@ -24,7 +25,7 @@ class SellerProfileUpdate(BaseModel):
     low_stock_alerts: Optional[bool] = None
 
 
-@router.get("/api/seller/{seller_id}/profile")
+@router.get("/api/seller/{seller_id}/profile", response_model=SellerProfileResponse)
 async def get_profile(
     seller_id: str, token: Optional[str] = Depends(get_jwt_token)
 ):
@@ -35,7 +36,7 @@ async def get_profile(
     return {"profile": profile}
 
 
-@router.put("/api/seller/{seller_id}/profile")
+@router.put("/api/seller/{seller_id}/profile", response_model=SellerProfileUpdateResponse)
 @limiter.limit("30/minute")
 async def update_profile(
     request: Request,

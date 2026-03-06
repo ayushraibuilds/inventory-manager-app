@@ -9,6 +9,7 @@ This is a slim orchestrator that:
 import asyncio
 import logging
 import os
+import sys
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +18,8 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
+from asgi_correlation_id import CorrelationIdMiddleware, correlation_id
+from pythonjsonlogger import jsonlogger
 
 load_dotenv()
 
@@ -29,82 +32,34 @@ class EndpointFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         return record.getMessage().find("GET /api/catalog") == -1
 
+class CorrelationIdFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.correlation_id = correlation_id.get() or "no-id"
+        return True
 
-logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
+def setup_logging():
+    log_handler = logging.StreamHandler(sys.stdout)
+    formatter = jsonlogger.JsonFormatter(
+        '%(asctime)s %(levelname)s %(correlation_id)s %(name)s %(message)s'
+    )
+    log_handler.setFormatter(formatter)
+    log_handler.addFilter(CorrelationIdFilter())
+    
+    logging.basicConfig(handlers=[log_handler], level=logging.INFO, force=True)
+    logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
-
-# --- Low Stock Alert Background Task ---
-async def check_low_stock_alerts():
-    """Background task that runs hourly, checks each seller's inventory,
-    and sends WhatsApp alerts if low_stock_alerts is enabled."""
-    from db import get_all_seller_ids, get_seller_profile, get_catalog, log_activity
-    from routes.auth import send_whatsapp_reply
-
-    token = None
-    while True:
-        await asyncio.sleep(3600)  # every hour
-        try:
-            seller_ids = get_all_seller_ids()
-            for sid in seller_ids:
-                profile = get_seller_profile(sid)
-                if not profile.get("low_stock_alerts"):
-                    continue
-
-                catalog = get_catalog(sid, jwt_token=token)
-                try:
-                    items = (
-                        catalog.get("bpp/catalog", {})
-                        .get("bpp/providers", [{}])[0]
-                        .get("items", [])
-                    )
-                except (KeyError, IndexError):
-                    continue
-
-                low_stock_items = []
-                for item in items:
-                    try:
-                        qty = int(
-                            str(
-                                item.get("quantity", {})
-                                .get("available", {})
-                                .get("count", 0)
-                                or 0
-                            )
-                        )
-                        name = item.get("descriptor", {}).get("name", "Unknown")
-                        if qty < 5:
-                            low_stock_items.append(f"  • {name} ({qty} left)")
-                    except (ValueError, TypeError):
-                        continue
-
-                if low_stock_items:
-                    alert = (
-                        f"⚠️ *Low Stock Alert*\n\n"
-                        f"The following items are running low:\n"
-                        + "\n".join(low_stock_items)
-                        + "\n\n_Update stock via WhatsApp or dashboard._"
-                    )
-                    send_whatsapp_reply(sid, alert)
-                    log_activity(
-                        sid,
-                        "LOW_STOCK_ALERT",
-                        details=f"{len(low_stock_items)} items low",
-                        jwt_token=token,
-                    )
-        except Exception:
-            pass  # Never let the background task crash
+setup_logging()
 
 
 # --- App setup ---
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Modern lifespan handler replacing deprecated @app.on_event."""
-    task = asyncio.create_task(check_low_stock_alerts())
     yield
-    task.cancel()
 
 
 app = FastAPI(title="ONDC Super Seller API", lifespan=lifespan)
+app.add_middleware(CorrelationIdMiddleware)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 

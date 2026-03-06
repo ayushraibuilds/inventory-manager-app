@@ -8,6 +8,7 @@ from typing import Optional
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+from schemas import OndcStatusResponse, OndcSearchResponse, OndcSubscribeResponse
 from db import get_catalog, get_seller_profile, get_all_seller_ids
 from ondc_adapter import build_on_search_response, BPP_ID, BPP_URI
 
@@ -72,7 +73,7 @@ class SubscribeRequest(BaseModel):
         return v.upper()
 
 
-@router.get("/status")
+@router.get("/status", response_model=OndcStatusResponse)
 @limiter.limit("30/minute")
 async def ondc_status(request: Request):
     """
@@ -100,7 +101,7 @@ async def ondc_status(request: Request):
     }
 
 
-@router.post("/on_search")
+@router.post("/on_search", response_model=OndcSearchResponse)
 @limiter.limit("20/minute")
 async def on_search(request: Request, body: SearchRequest):
     """
@@ -148,7 +149,7 @@ async def on_search(request: Request, body: SearchRequest):
     return ondc_response
 
 
-@router.post("/subscribe")
+@router.post("/subscribe", response_model=OndcSubscribeResponse)
 @limiter.limit("5/minute")
 async def subscribe(request: Request, body: SubscribeRequest):
     """

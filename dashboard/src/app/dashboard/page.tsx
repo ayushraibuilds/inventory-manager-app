@@ -164,11 +164,17 @@ export default function Dashboard() {
       } catch { /* heartbeat */ }
     };
     es.onerror = () => {
+      console.warn("SSE connection error. Reconnecting...");
       es.close();
-      const interval = setInterval(() => fetchCatalog(false, currentPage), 5000);
-      return () => clearInterval(interval);
+      // Wait before trying to reconnect to avoid spamming the server
+      setTimeout(() => {
+        if (activeSellerId && !isLoading) fetchCatalog(false, currentPage);
+      }, 5000);
     };
-    return () => { es.close(); };
+
+    return () => {
+      es.close();
+    };
   }, [activeSellerId, currentPage, isLoading, fetchCatalog]);
 
   // --- CRUD handlers ---

@@ -203,8 +203,15 @@ def ensure_profile_exists(seller_id: str, jwt_token: str = None):
 def get_seller_id_by_phone(phone: str, jwt_token: str = None) -> str:
     """Looks up a seller's UUID by their registered phone number."""
     sb = get_supabase_client(jwt_token)
+    
+    # Strip non-digits and use the last 10 for a broad LIKE match 
+    # (handles +91 vs local formats resiliently)
+    import re
+    digits = re.sub(r"\D", "", phone)
+    like_pattern = f"%{digits[-10:]}" if len(digits) >= 10 else phone
+
     try:
-        response = sb.table("profiles").select("id").eq("phone", phone).execute()
+        response = sb.table("profiles").select("id").ilike("phone", like_pattern).execute()
         if response.data:
             return response.data[0]["id"]
     except Exception as e:

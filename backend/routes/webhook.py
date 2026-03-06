@@ -20,6 +20,7 @@ from db import (
     log_activity,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["webhook"])
 
 
@@ -35,16 +36,28 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
         form_dict = dict(form_data)
         seller_id = form_dict.get("From", "unknown_seller")
         raw_message = form_dict.get("Body", "")
-        print(
-            f"WEBHOOK TRACER: Incoming form payload: From={seller_id} Length={len(raw_message)}"
+        message_id = form_dict.get("MessageSid", "")
+        logger.info(
+            f"WEBHOOK TRACER: Incoming form payload: From={seller_id} Length={len(raw_message)} MessageSid={message_id}"
         )
+
+        if message_id:
+            from redis_client import redis_client
+            try:
+                # Atomically set and check if this is the first time we see this message from Twilio
+                acquired = await redis_client.set(f"webhook_dedup:{message_id}", "1", ex=86400, nx=True)
+                if not acquired:
+                    logger.info(f"WEBHOOK TRACER: Deduplicating retried message: {message_id}")
+                    return {"status": "deduplicated"}
+            except Exception as e:
+                logger.warning(f"Redis deduplication error (likely offline), skipping deduplication: {e}")
 
         if not verify_twilio_signature(request, form_dict):
             raise HTTPException(status_code=403, detail="Invalid Twilio signature")
     except HTTPException:
         raise
     except Exception as e:
-        print(
+        logger.error(
             f"WEBHOOK TRACER: Form parsing or signature validation crashed with {e}!"
         )
         try:
@@ -58,7 +71,7 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     # --- Detect language early (for onboarding & error messages) ---
     lang_result = detect_language(raw_message)
     detected_lang = lang_result.lang_code
-    print(f"Language detected: {detected_lang} (method={lang_result.method})")
+    logger.info(f"Language detected: {detected_lang} (method={lang_result.method})")
 
     # --- Voice Note / Image Interception ---
     image_media_url = None
@@ -72,7 +85,7 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
                     from voice_processor import voice_processor
 
                     transcription = await voice_processor.transcribe_audio(media_url)
-                    print(f"🎤 Voice Note Transcribed: {transcription}")
+                    logger.info(f"🎤 Voice Note Transcribed: {transcription}")
                     if transcription:
                         raw_message = transcription
                         # Re-detect language on transcribed text
@@ -80,9 +93,9 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
                         detected_lang = lang_result.lang_code
             elif content_type.startswith("image/"):
                 image_media_url = form_dict.get("MediaUrl0")
-                print(f"📷 Image received: {content_type}")
+                logger.info(f"📷 Image received: {content_type}")
     except Exception as e:
-        print(f"Media Processing Error: {e}")
+        logger.error(f"Media Processing Error: {e}")
         reply = format_reply(detected_lang, "VOICE_ERROR")
         await asyncio.to_thread(
             send_whatsapp_reply, seller_id, reply,
@@ -92,9 +105,9 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     # --- Phone to UUID Resolution ---
     extracted_phone = seller_id.replace("whatsapp:", "")
 
-    real_seller_id = get_seller_id_by_phone(extracted_phone)
+    real_seller_id = await asyncio.to_thread(get_seller_id_by_phone, extracted_phone)
     if not real_seller_id:
-        print(f"Unknown phone number: {extracted_phone}")
+        logger.warning(f"Unknown phone number: {extracted_phone}")
         reply = format_reply(detected_lang, "UNREGISTERED")
         await asyncio.to_thread(send_whatsapp_reply, seller_id, reply)  # type: ignore
         return {"status": "error", "message": "Unregistered Seller Phone"}
@@ -102,8 +115,9 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     seller_id = real_seller_id
 
     # --- Per-Seller Rate Limit ---
-    if is_rate_limited(seller_id):
-        print(f"RATE LIMITED seller: {seller_id}")
+    is_limited = await asyncio.to_thread(is_rate_limited, seller_id)
+    if is_limited:
+        logger.warning(f"RATE LIMITED seller: {seller_id}")
         reply = format_reply(detected_lang, "RATE_LIMITED")
         await asyncio.to_thread(
             send_whatsapp_reply, f"whatsapp:{extracted_phone}", reply,
@@ -111,33 +125,52 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
         return {"status": "rate_limited"}
 
     # --- Seller Onboarding ---
-    profile = get_seller_profile(seller_id)
+    profile = await asyncio.to_thread(get_seller_profile, seller_id)
     if not profile.get("store_name"):
         welcome = format_reply(detected_lang, "ONBOARDING")
         await asyncio.to_thread(send_whatsapp_reply, f"whatsapp:{extracted_phone}", welcome)  # type: ignore
-        log_activity(
+        await asyncio.to_thread(
+            log_activity,
             seller_id,
             "SELLER_ONBOARDED",
-            details="New seller interacted",
-            jwt_token=token,
+            "New seller interacted",
+            "",
+            token,
         )
 
     # --- Audit Trail: Log incoming message ---
-    log_activity(
+    await asyncio.to_thread(
+        log_activity,
         seller_id,
         "WHATSAPP_RECEIVED",
-        item_name="",
-        details=raw_message[:500],
-        jwt_token=token,
+        "",
+        raw_message[:500],
+        token,
     )
 
     # --- Fetch conversation memory ---
-    conversation_history = get_conversation_history(seller_id, limit=3)
+    conversation_history = await asyncio.to_thread(get_conversation_history, seller_id, 3, None)
 
     print("WEBHOOK TRACER: Queuing Agent processing thread")
-    background_tasks.add_task(
-        process_webhook_background, raw_message, seller_id, extracted_phone, detected_lang, conversation_history, image_media_url, token
-    )
+    from celery_app import process_webhook_task
+    from redis_client import redis_client
+    
+    celery_queued = False
+    try:
+        # Check if Redis is actually alive before blocking on Celery
+        await asyncio.wait_for(redis_client.ping(), timeout=1.0)
+        process_webhook_task.delay(
+            raw_message, seller_id, extracted_phone, detected_lang, conversation_history, image_media_url, token
+        )
+        logger.info("Successfully queued webhook processing via Celery.")
+        celery_queued = True
+    except Exception as e:
+        logger.warning(f"Redis ping or Celery fail, bypassing Celery and using FastAPI BackgroundTasks: {type(e).__name__} {e}")
+
+    if not celery_queued:
+        background_tasks.add_task(
+            process_webhook_background, raw_message, seller_id, extracted_phone, detected_lang, conversation_history, image_media_url, token
+        )
 
     return {"status": "received"}
 
@@ -184,7 +217,7 @@ async def process_webhook_background(
                 log_activity(seller_id, "WHATSAPP_SENT", details=reply[:500], jwt_token=token)
                 return
         except Exception as e:
-            print(f"Image Processing Error: {e}")
+            logger.error(f"Image Processing Error: {e}")
             reply = format_reply(detected_lang, "ERROR")
             send_whatsapp_reply(f"whatsapp:{extracted_phone}", reply)
             return
@@ -195,7 +228,7 @@ async def process_webhook_background(
             process_whatsapp_message, raw_message, seller_id, conversation_history or []
         )  # type: ignore
     except Exception as e:
-        print(f"Agent Processing Error: {e}")
+        logger.error(f"Agent Processing Error: {e}")
         reply = format_reply(detected_lang, "ERROR")
         send_whatsapp_reply(f"whatsapp:{extracted_phone}", reply)
         return

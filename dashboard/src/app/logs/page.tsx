@@ -74,7 +74,7 @@ export default function WebhookLogsPage() {
             if (!res.ok) return;
             const data = await res.json();
             setLogs(
-                (data || []).map((a: any, i: number) => ({
+                (data.logs || []).map((a: any, i: number) => ({
                     id: a.id || String(i),
                     action: a.action || "UNKNOWN",
                     item_name: a.item_name || "",

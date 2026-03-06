@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+from schemas import OrderCreateResponse, OrdersResponse, OrderStatusResponse
 from routes.auth import get_jwt_token, verify_api_key, send_whatsapp_reply
 from db import create_order, get_orders, update_order_status, log_activity
 
@@ -32,7 +33,7 @@ class OrderStatusUpdate(BaseModel):
 
 
 # --- Order endpoints ---
-@router.post("/api/orders", dependencies=[Depends(verify_api_key)])
+@router.post("/api/orders", dependencies=[Depends(verify_api_key)], response_model=OrderCreateResponse)
 @limiter.limit("60/minute")
 async def place_order(
     request: Request,
@@ -76,7 +77,7 @@ async def place_order(
     return {"status": "success", "order_id": order_id}
 
 
-@router.get("/api/orders")
+@router.get("/api/orders", response_model=OrdersResponse)
 async def list_orders(
     token: Optional[str] = Depends(get_jwt_token),
     seller_id: Optional[str] = None,
@@ -99,7 +100,7 @@ async def list_orders(
     return {"orders": orders}
 
 
-@router.put("/api/orders/{order_id}/status", dependencies=[Depends(verify_api_key)])
+@router.put("/api/orders/{order_id}/status", dependencies=[Depends(verify_api_key)], response_model=OrderStatusResponse)
 @limiter.limit("60/minute")
 async def change_order_status(
     request: Request,

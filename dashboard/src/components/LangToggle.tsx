@@ -16,6 +16,7 @@ export default function LangToggle({ onChange }: { onChange?: (lang: Lang) => vo
         setLang(next);
         setStoredLang(next);
         onChange?.(next);
+        window.location.reload();
     };
 
     return (

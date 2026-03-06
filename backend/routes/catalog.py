@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+from schemas import PaginatedCatalogResponse, PriceCheckResponse
+
 from routes.auth import get_jwt_token, verify_api_key
 from db import (
     get_all_catalogs,
@@ -22,6 +24,8 @@ from db import (
     get_activity_logs,
     get_seller_profile,
 )
+
+logger = logging.getLogger(__name__)
 
 limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(tags=["catalog"])          # /api/* — backward compat
@@ -102,8 +106,18 @@ class CatalogImport(BaseModel):
     items: List[CatalogImportItem]
 
 
+# --- Catalog Cache Helpers ---
+async def invalidate_catalog_cache(seller_id: str):
+    try:
+        from redis_client import redis_client
+        await redis_client.delete(f"catalog_db:{seller_id}")
+        await redis_client.delete("catalog_db:all")
+    except Exception as e:
+        logger.warning(f"Redis invalidation skipped (likely offline): {e}")
+
 # --- Catalog endpoints ---
-@router.get("/api/catalog")
+@router.get("/api/catalog", response_model=PaginatedCatalogResponse)
+@v1_router.get("/catalog", response_model=PaginatedCatalogResponse)
 async def get_master_catalog(
     token: Optional[str] = Depends(get_jwt_token),
     limit: int = 50,
@@ -114,10 +128,27 @@ async def get_master_catalog(
     sort_order: str = "asc",
 ):
     """Endpoint for the dashboard to fetch the latest ONDC catalog."""
-    if seller_id:
-        catalogs = [get_catalog(seller_id, jwt_token=token)]
+    cached = None
+    cache_key = f"catalog_db:{seller_id}" if seller_id else "catalog_db:all"
+    try:
+        from redis_client import redis_client
+        cached = await redis_client.get(cache_key)
+    except Exception as e:
+        logger.warning(f"Redis get skipped (likely offline): {e}")
+        
+    if cached:
+        catalogs = json.loads(cached)
     else:
-        catalogs = get_all_catalogs()
+        if seller_id:
+            catalogs = [await asyncio.to_thread(get_catalog, seller_id, jwt_token=token)]
+        else:
+            catalogs = await asyncio.to_thread(get_all_catalogs)
+            
+        try:
+            from redis_client import redis_client
+            await redis_client.set(cache_key, json.dumps(catalogs), ex=300)
+        except Exception as e:
+            logger.warning(f"Redis set skipped (likely offline): {e}")
 
     all_items: List[Dict[str, Any]] = []
     for cat in catalogs:
@@ -217,9 +248,9 @@ async def catalog_stream(
         while True:
             try:
                 if seller_id:
-                    catalogs = [get_catalog(seller_id, jwt_token=token)]
+                    catalogs = [await asyncio.to_thread(get_catalog, seller_id, jwt_token=token)]
                 else:
-                    catalogs = get_all_catalogs()
+                    catalogs = await asyncio.to_thread(get_all_catalogs)
 
                 all_items: list = []
                 for cat in catalogs:
@@ -284,7 +315,7 @@ async def catalog_stream(
 @router.get("/api/sellers")
 async def list_sellers(token: Optional[str] = Depends(get_jwt_token)):
     """Returns a list of all seller IDs known to the system."""
-    seller_ids = get_all_seller_ids()
+    seller_ids = await asyncio.to_thread(get_all_seller_ids)
     return {"sellers": seller_ids}
 
 
@@ -296,7 +327,7 @@ async def get_activity(
     token: Optional[str] = Depends(get_jwt_token),
 ):
     """Returns recent activity log entries."""
-    logs = get_activity_logs(limit=limit, seller_id=seller_id or "", jwt_token=token)
+    logs = await asyncio.to_thread(get_activity_logs, limit=limit, seller_id=seller_id or "", jwt_token=token)
     return {"logs": logs}
 
 
@@ -308,9 +339,9 @@ async def get_analytics(
 ):
     """Returns analytics data for the dashboard."""
     if seller_id:
-        catalogs = [get_catalog(seller_id, jwt_token=token)]
+        catalogs = [await asyncio.to_thread(get_catalog, seller_id, jwt_token=token)]
     else:
-        catalogs = get_all_catalogs()
+        catalogs = await asyncio.to_thread(get_all_catalogs)
 
     all_items: list = []
     for cat in catalogs:
@@ -421,6 +452,7 @@ async def create_item(
 
     catalog["bpp/catalog"]["bpp/providers"][0]["items"] = items
     save_catalog(item.seller_id, catalog, jwt_token=token)
+    await invalidate_catalog_cache(item.seller_id)
     log_activity(
         item.seller_id,
         "ITEM_ADDED",
@@ -484,6 +516,7 @@ async def update_item(
 
     catalog["bpp/catalog"]["bpp/providers"][0]["items"] = items
     save_catalog(item.seller_id, catalog, jwt_token=token)
+    await invalidate_catalog_cache(item.seller_id)
     return {"status": "success"}
 
 
@@ -515,6 +548,7 @@ async def delete_item(
     ]
     catalog["bpp/catalog"]["bpp/providers"][0]["items"] = updated_items
     save_catalog(clean_seller_id, catalog, jwt_token=token)
+    await invalidate_catalog_cache(clean_seller_id)
     log_activity(clean_seller_id, "ITEM_DELETED", deleted_name)
     return {
         "status": "success",
@@ -554,6 +588,7 @@ async def bulk_delete_items(
 
     catalog["bpp/catalog"]["bpp/providers"][0]["items"] = updated_items
     save_catalog(clean_seller_id, catalog, jwt_token=token)
+    await invalidate_catalog_cache(clean_seller_id)
     log_activity(
         clean_seller_id,
         "BULK_DELETE",
@@ -611,6 +646,7 @@ async def import_catalog(
 
     catalog["bpp/catalog"]["bpp/providers"][0]["items"] = existing_items
     save_catalog(clean_seller_id, catalog, jwt_token=token)
+    await invalidate_catalog_cache(clean_seller_id)
     log_activity(
         clean_seller_id,
         "CATALOG_IMPORTED",
@@ -711,6 +747,7 @@ async def import_csv(
     if imported_count > 0:
         catalog["bpp/catalog"]["bpp/providers"][0]["items"] = existing_items
         save_catalog(clean_seller_id, catalog, jwt_token=token)
+        await invalidate_catalog_cache(clean_seller_id)
         log_activity(
             clean_seller_id,
             "CSV_IMPORTED",
