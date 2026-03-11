@@ -20,8 +20,11 @@ from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 from asgi_correlation_id import CorrelationIdMiddleware, correlation_id
 from pythonjsonlogger import jsonlogger
+from middleware.security import SecurityHeadersMiddleware
 
 load_dotenv()
+
+IS_PRODUCTION = os.getenv("NODE_ENV", "").lower() == "production"
 
 # Rate limiter (shared across all routers)
 limiter = Limiter(key_func=get_remote_address)
@@ -49,16 +52,50 @@ def setup_logging():
     logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
 setup_logging()
+logger = logging.getLogger(__name__)
+
+
+def _validate_production_env():
+    """Fail fast if critical env vars are missing or insecure in production."""
+    errors = []
+
+    # Critical services
+    if not os.getenv("SUPABASE_URL") or "your-project" in os.getenv("SUPABASE_URL", ""):
+        errors.append("SUPABASE_URL is not configured")
+    if not os.getenv("SUPABASE_ANON_KEY") or "your-" in os.getenv("SUPABASE_ANON_KEY", ""):
+        errors.append("SUPABASE_ANON_KEY is not configured")
+    if not os.getenv("GROQ_API_KEY") or "your-" in os.getenv("GROQ_API_KEY", ""):
+        errors.append("GROQ_API_KEY is not configured")
+
+    # Security
+    jwt_secret = os.getenv("JWT_SECRET", "")
+    if not jwt_secret or jwt_secret == "super-secret-demo-jwt-key-change-me":
+        errors.append("JWT_SECRET is using the insecure default — set a strong random value")
+
+    if errors:
+        for err in errors:
+            logger.critical(f"STARTUP BLOCKED: {err}")
+        raise SystemExit(
+            f"\n❌ Production startup blocked — {len(errors)} configuration error(s):\n"
+            + "\n".join(f"  • {e}" for e in errors)
+            + "\n\nFix your .env file and restart.\n"
+        )
 
 
 # --- App setup ---
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Modern lifespan handler replacing deprecated @app.on_event."""
+    if IS_PRODUCTION:
+        _validate_production_env()
+        logger.info("✅ Production environment validated — all critical vars present.")
+    else:
+        logger.info("⚙️ Running in development mode — production guards skipped.")
     yield
 
 
 app = FastAPI(title="ONDC Super Seller API", lifespan=lifespan)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)

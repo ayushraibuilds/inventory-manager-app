@@ -1,9 +1,12 @@
 import os
 import json
 import time
+import logging
 from datetime import datetime
 from supabase import create_client, Client, ClientOptions
 from dotenv import load_dotenv, dotenv_values
+
+logger = logging.getLogger(__name__)
 
 # --- Cached env loader ---
 _env_cache = None
@@ -58,7 +61,7 @@ def get_catalog(seller_id: str, jwt_token: str = None) -> dict:
     try:
         response = sb.table("products").select("*").eq("seller_id", seller_id).execute()
     except Exception as e:
-        print(f"Supabase GET Error: {e}")
+        logger.error(f"Supabase GET Error: {e}")
         return build_empty_catalog()
     
     catalog = build_empty_catalog()
@@ -120,7 +123,7 @@ def save_catalog(seller_id: str, catalog_json: dict, jwt_token: str = None):
         if inserts:
             sb.table("products").upsert(inserts).execute()
     except Exception as e:
-        print(f"Supabase save_catalog Error: {e}")
+        logger.error(f"Supabase save_catalog Error: {e}")
 
 def get_all_catalogs() -> list:
     """Helper for the dashboard to quickly render everyone (Service Role used)."""
@@ -149,7 +152,7 @@ def log_activity(seller_id: str, action: str, item_name: str = "", details: str 
             "details": details
         }).execute()
     except Exception as e:
-        print(f"Supabase log_activity Error: {e}")
+        logger.error(f"Supabase log_activity Error: {e}")
 
 def get_activity_logs(limit: int = 50, seller_id: str = "", jwt_token: str = None) -> list:
     sb = get_supabase_client(jwt_token)
@@ -186,7 +189,7 @@ def get_conversation_history(seller_id: str, limit: int = 3, jwt_token: str = No
 
         return history[-limit * 2:]  # at most limit pairs
     except Exception as e:
-        print(f"get_conversation_history error: {e}")
+        logger.error(f"get_conversation_history error: {e}")
         return []
 
 
@@ -198,7 +201,7 @@ def ensure_profile_exists(seller_id: str, jwt_token: str = None):
         if not existing.data:
             sb.table("profiles").insert({"id": seller_id, "user_id": seller_id}).execute()
     except Exception as e:
-        print(f"ensure_profile_exists error: {e}")
+        logger.error(f"ensure_profile_exists error: {e}")
 
 def get_seller_id_by_phone(phone: str, jwt_token: str = None) -> str:
     """Looks up a seller's UUID by their registered phone number."""
@@ -215,7 +218,7 @@ def get_seller_id_by_phone(phone: str, jwt_token: str = None) -> str:
         if response.data:
             return response.data[0]["id"]
     except Exception as e:
-        print(f"Phone lookup error: {e}")
+        logger.error(f"Phone lookup error: {e}")
     return None
 
 def save_seller_profile(seller_id: str, profile: dict, jwt_token: str = None):
@@ -230,11 +233,11 @@ def save_seller_profile(seller_id: str, profile: dict, jwt_token: str = None):
         current_data["updated_at"] = datetime.utcnow().isoformat()
         res = sb.table("profiles").upsert(current_data).execute()
         if hasattr(res, 'error') and res.error:
-            print(f"SUPABASE POSTGREST ERROR: {res.error}")
+            logger.error(f"Supabase PostgREST error: {res.error}")
         else:
-            print(f"PROFILE UPSERT SUCCESS: {current_data['id']}")
+            logger.info(f"Profile upsert success: {current_data['id']}")
     except Exception as e:
-        print(f"Supabase upsert profile Exception: {e}")
+        logger.error(f"Supabase upsert profile error: {e}")
 
 def get_seller_profile(seller_id: str, jwt_token: str = None) -> dict:
     sb = get_supabase_client(jwt_token)

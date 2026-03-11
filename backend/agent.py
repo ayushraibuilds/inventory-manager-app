@@ -4,8 +4,10 @@ from langgraph.graph import StateGraph, START, END
 import uuid
 import os
 import re
+import time
 import difflib
 import logging
+import threading
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from langchain_groq import ChatGroq
@@ -14,11 +16,73 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 load_dotenv()
 logger = logging.getLogger(__name__)
-GLOBAL_LLM = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.1)
+GLOBAL_LLM = ChatGroq(
+    model="llama-3.3-70b-versatile",
+    temperature=0.1,
+    timeout=30,        # 30s HTTP timeout — prevents indefinite hangs
+    max_retries=0,     # We handle retries ourselves via tenacity
+)
+
+
+# ── Circuit Breaker ──────────────────────────────────────────────
+# If the LLM fails 5 times within 60 seconds, stop hammering it
+# and fail fast for 60 seconds to let Groq recover.
+
+class _CircuitBreaker:
+    def __init__(self, failure_threshold: int = 5, recovery_timeout: int = 60):
+        self._failure_count = 0
+        self._failure_threshold = failure_threshold
+        self._recovery_timeout = recovery_timeout
+        self._last_failure_time = 0.0
+        self._first_failure_time = 0.0
+        self._lock = threading.Lock()
+
+    @property
+    def is_open(self) -> bool:
+        with self._lock:
+            if self._failure_count < self._failure_threshold:
+                return False
+            # Auto-reset after recovery_timeout
+            if time.time() - self._last_failure_time > self._recovery_timeout:
+                self._failure_count = 0
+                logger.info("Circuit breaker RESET — resuming LLM calls.")
+                return False
+            return True
+
+    def record_failure(self):
+        with self._lock:
+            now = time.time()
+            if self._failure_count == 0:
+                self._first_failure_time = now
+            # Only count failures within the window
+            if now - self._first_failure_time > self._recovery_timeout:
+                self._failure_count = 1
+                self._first_failure_time = now
+            else:
+                self._failure_count += 1
+            self._last_failure_time = now
+            if self._failure_count >= self._failure_threshold:
+                logger.critical(
+                    f"Circuit breaker OPEN — {self._failure_count} LLM failures in "
+                    f"{now - self._first_failure_time:.0f}s. Failing fast for {self._recovery_timeout}s."
+                )
+
+    def record_success(self):
+        with self._lock:
+            self._failure_count = 0
+
+
+_llm_breaker = _CircuitBreaker(failure_threshold=5, recovery_timeout=60)
 
 
 def _llm_invoke_with_retry(structured_llm, prompt: str, label: str = "LLM"):
-    """Invoke a structured LLM with retry logic (3 attempts, exponential backoff)."""
+    """Invoke a structured LLM with retry logic, timeout, and circuit breaker."""
+    if _llm_breaker.is_open:
+        raise RuntimeError(
+            "LLM_CIRCUIT_OPEN: Groq API is temporarily unavailable. "
+            "Please try again in a minute."
+        )
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=8),
@@ -30,7 +94,13 @@ def _llm_invoke_with_retry(structured_llm, prompt: str, label: str = "LLM"):
     def _invoke():
         return structured_llm.invoke(prompt)
 
-    return _invoke()
+    try:
+        result = _invoke()
+        _llm_breaker.record_success()
+        return result
+    except Exception:
+        _llm_breaker.record_failure()
+        raise
 
 class AgentState(TypedDict, total=False):
     raw_whatsapp_input: str

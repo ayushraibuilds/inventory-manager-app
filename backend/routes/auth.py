@@ -45,10 +45,14 @@ def verify_twilio_signature(request: Request, form_data: dict) -> bool:
 
     signature = request.headers.get("x-twilio-signature", "")
     
-    # Allow local manual curl testing if no signature is present
-    if not signature and ("localhost" in url or "127.0.0.1" in url):
-        logging.info("Bypassing Twilio validation for local manual curl test.")
+    # Allow local manual curl testing ONLY in development mode
+    is_production = os.getenv("NODE_ENV", "").lower() == "production"
+    if not signature and not is_production and ("localhost" in url or "127.0.0.1" in url):
+        logging.info("Bypassing Twilio validation for local manual curl test (dev mode only).")
         return True
+    elif not signature:
+        logging.error("Missing Twilio signature — rejected in production mode.")
+        return False
 
     env = dotenv_values(".env")
     auth_token = env.get("TWILIO_AUTH_TOKEN", "")

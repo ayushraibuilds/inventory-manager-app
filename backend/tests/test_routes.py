@@ -11,6 +11,7 @@ os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
 os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-key")
 os.environ.setdefault("GROQ_API_KEY", "test-groq-key")
+os.environ["API_KEY"] = "test-api-key"  # Set a known key for authenticated endpoints
 
 from tests.conftest import MockSupabaseClient
 
@@ -35,7 +36,7 @@ def patch_supabase():
 def client():
     from fastapi.testclient import TestClient
     from server import app
-    return TestClient(app)
+    return TestClient(app, headers={"X-API-Key": "test-api-key"})
 
 
 class TestHealthEndpoint:

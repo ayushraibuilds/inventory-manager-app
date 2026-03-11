@@ -3,8 +3,24 @@ import "./globals.css";
 import { AuthProvider } from "@/components/AuthProvider";
 
 export const metadata: Metadata = {
-  title: "ONDC Super Seller Dashboard",
-  description: "Live inventory on the ONDC network purely through WhatsApp",
+  title: "ONDC Super Seller — WhatsApp Inventory Dashboard",
+  description:
+    "Manage your ONDC catalog through WhatsApp voice notes, images, and text. Real-time dashboard with analytics, price intelligence, and order management.",
+  keywords: ["ONDC", "WhatsApp", "inventory", "catalog", "kirana", "India", "seller"],
+  openGraph: {
+    title: "ONDC Super Seller",
+    description:
+      "Let Indian shopkeepers manage their ONDC catalog through WhatsApp — in Hindi, English, or Hinglish.",
+    type: "website",
+    locale: "en_IN",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "ONDC Super Seller",
+    description:
+      "WhatsApp-native inventory management for ONDC. Voice, image, and text support.",
+  },
+  robots: { index: true, follow: true },
 };
 
 export default function RootLayout({
