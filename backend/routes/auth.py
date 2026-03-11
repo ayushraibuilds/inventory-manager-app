@@ -45,17 +45,20 @@ def verify_twilio_signature(request: Request, form_data: dict) -> bool:
 
     signature = request.headers.get("x-twilio-signature", "")
     
-    # Allow local manual curl testing ONLY in development mode
+    # Allow unsigned requests ONLY in development mode (Twilio sandbox doesn't always sign)
     is_production = os.getenv("NODE_ENV", "").lower() == "production"
-    if not signature and not is_production and ("localhost" in url or "127.0.0.1" in url):
-        logging.info("Bypassing Twilio validation for local manual curl test (dev mode only).")
+    if not signature and not is_production:
+        logging.info("Bypassing Twilio validation (dev mode — non-production environment).")
         return True
     elif not signature:
         logging.error("Missing Twilio signature — rejected in production mode.")
         return False
 
-    env = dotenv_values(".env")
-    auth_token = env.get("TWILIO_AUTH_TOKEN", "")
+    # Read from system env (Railway/Docker) first, fall back to .env file
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+    if not auth_token:
+        env = dotenv_values(".env")
+        auth_token = env.get("TWILIO_AUTH_TOKEN", "")
     if not auth_token:
         logging.error("Missing TWILIO_AUTH_TOKEN. Cannot verify signature.")
         return False
