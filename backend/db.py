@@ -18,7 +18,11 @@ def _get_env():
     now = time.time()
     # Simple timestamp check - no locks to avoid async deadlocks under load
     if _env_cache is None or (now - _env_cache_ts > _ENV_TTL):
-        _env_cache = dotenv_values(".env")
+        # Merge: system env vars (Railway/Docker) + .env file (local dev)
+        # .env file values take priority when both exist
+        merged = dict(os.environ)
+        merged.update(dotenv_values(".env"))
+        _env_cache = merged
         _env_cache_ts = now
     return _env_cache
 
