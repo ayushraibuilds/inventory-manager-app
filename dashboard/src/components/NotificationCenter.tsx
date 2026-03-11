@@ -50,7 +50,7 @@ export default function NotificationCenter() {
             );
             if (!res.ok) return;
             const data = await res.json();
-            const items = (data || []).map((a: any, i: number) => ({
+            const items = (data.logs || []).map((a: any, i: number) => ({
                 id: a.id || String(i),
                 action: a.action || "UNKNOWN",
                 item_name: a.item_name || "",
@@ -63,9 +63,14 @@ export default function NotificationCenter() {
     }, [sellerId, token]);
 
     useEffect(() => {
-        fetchNotifications();
+        const initialFetch = window.setTimeout(() => {
+            void fetchNotifications();
+        }, 0);
         const interval = setInterval(fetchNotifications, 30000);
-        return () => clearInterval(interval);
+        return () => {
+            clearTimeout(initialFetch);
+            clearInterval(interval);
+        };
     }, [fetchNotifications]);
 
     return (

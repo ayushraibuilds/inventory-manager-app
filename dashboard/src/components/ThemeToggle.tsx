@@ -6,7 +6,10 @@ import { Sun, Moon, Monitor } from "lucide-react";
 type ThemeMode = "dark" | "light" | "system";
 
 export default function ThemeToggle() {
-    const [mode, setMode] = useState<ThemeMode>("system");
+    const [mode, setMode] = useState<ThemeMode>(() => {
+        if (typeof window === "undefined") return "system";
+        return (localStorage.getItem("ondc-theme-mode") as ThemeMode | null) || "system";
+    });
 
     const applyTheme = (m: ThemeMode) => {
         let resolved: "dark" | "light";
@@ -19,10 +22,7 @@ export default function ThemeToggle() {
     };
 
     useEffect(() => {
-        const saved = localStorage.getItem("ondc-theme-mode") as ThemeMode | null;
-        const initial = saved || "system";
-        setMode(initial);
-        applyTheme(initial);
+        applyTheme(mode);
 
         // Listen for system preference changes when in system mode
         const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -33,7 +33,7 @@ export default function ThemeToggle() {
         };
         mq.addEventListener("change", handler);
         return () => mq.removeEventListener("change", handler);
-    }, []);
+    }, [mode]);
 
     const cycle = () => {
         const order: ThemeMode[] = ["system", "dark", "light"];

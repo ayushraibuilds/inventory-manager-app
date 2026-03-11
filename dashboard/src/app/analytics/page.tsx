@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, BarChart3, Package, TrendingUp, PieChart as PieIcon, ChevronDown } from "lucide-react";
+import { ArrowLeft, BarChart3, Package, TrendingUp, PieChart as PieIcon } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import Link from "next/link";
 import {
@@ -26,17 +26,19 @@ interface AnalyticsData {
 const CHART_COLORS = ["#58a6ff", "#f78166", "#8b5cf6", "#22c55e", "#eab308", "#ec4899", "#06b6d4"];
 
 export default function AnalyticsPage() {
-    const { sellerId, isLoading: authLoading } = useAuth();
+    const { sellerId, token, isLoading: authLoading } = useAuth();
     const activeSellerId = sellerId || "";
 
     const [data, setData] = useState<AnalyticsData | null>(null);
     const [loading, setLoading] = useState(true);
 
     const fetchAnalytics = useCallback(async () => {
-        if (!activeSellerId) return;
+        if (!activeSellerId || !token) return;
         setLoading(true);
         try {
-            const res = await fetch(`${API_URL}/api/analytics?seller_id=${encodeURIComponent(activeSellerId)}`);
+            const res = await fetch(`${API_URL}/api/analytics?seller_id=${encodeURIComponent(activeSellerId)}`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
             if (res.status === 429) { toast.error("Rate limit exceeded. Please try again later."); return; }
             if (res.ok) {
                 setData(await res.json());
@@ -46,11 +48,11 @@ export default function AnalyticsPage() {
         } finally {
             setLoading(false);
         }
-    }, [activeSellerId]);
+    }, [activeSellerId, token]);
 
     useEffect(() => {
-        if (!authLoading && activeSellerId) fetchAnalytics();
-    }, [fetchAnalytics, authLoading, activeSellerId]);
+        if (!authLoading && activeSellerId && token) fetchAnalytics();
+    }, [fetchAnalytics, authLoading, activeSellerId, token]);
 
     const [isMounted, setIsMounted] = useState(false);
     useEffect(() => { setIsMounted(true); }, []);

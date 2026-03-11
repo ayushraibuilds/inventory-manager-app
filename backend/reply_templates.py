@@ -18,6 +18,7 @@ TEMPLATES = {
             '• "Update rice price to 60 rupees"'
         ),
         "RATE_LIMITED": "⏳ You're sending messages too quickly! Please wait a moment before sending another update.",
+        "RECEIVED": "⏳ Received your message. Updating your catalog now.",
         "ONBOARDING": (
             "🎉 *Welcome to ONDC Super Seller!*\n\n"
             "I'm your AI catalog assistant. Just tell me what you sell in Hindi or English:\n\n"
@@ -43,6 +44,7 @@ TEMPLATES = {
             '• "Chawal ka price 60 karo"'
         ),
         "RATE_LIMITED": "⏳ आप बहुत तेज़ी से मैसेज भेज रहे हैं! कृपया थोड़ा रुकें।",
+        "RECEIVED": "⏳ आपका मैसेज मिल गया। आपका कैटलॉग अभी अपडेट किया जा रहा है।",
         "ONBOARDING": (
             "🎉 *ONDC Super Seller में आपका स्वागत है!*\n\n"
             "मैं आपका AI कैटलॉग असिस्टेंट हूँ। बस बताइए आप क्या बेचते हैं:\n\n"

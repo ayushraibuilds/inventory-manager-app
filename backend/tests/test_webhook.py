@@ -1,6 +1,6 @@
 """Tests for webhook endpoint processing (mocked — no real Twilio/Groq calls)."""
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 
 
@@ -60,6 +60,26 @@ class TestWebhookEndpoint:
             "Body": "hello",
         })
         assert res.status_code == 200
+
+    @patch("routes.webhook.verify_twilio_signature", return_value=True)
+    def test_webhook_sends_received_ack(self, mock_sig, client):
+        with patch("routes.webhook.get_seller_id_by_phone", return_value="seller-123"), \
+             patch("routes.webhook.get_seller_profile", return_value={"store_name": "Test Store"}), \
+             patch("routes.webhook.is_rate_limited", return_value=False), \
+             patch("routes.webhook.get_conversation_history", return_value=[]), \
+             patch("routes.webhook.log_activity"), \
+             patch("routes.webhook.send_whatsapp_reply", return_value=True) as mock_reply, \
+             patch("routes.webhook.process_webhook_background", new=AsyncMock()), \
+             patch("redis_client.redis_client.ping", side_effect=RuntimeError("redis offline")):
+            res = client.post("/whatsapp-webhook", data={
+                "From": "whatsapp:+919876543210",
+                "Body": "add 5 kg rice at 60",
+            })
+
+        assert res.status_code == 200
+        mock_reply.assert_called_once()
+        assert mock_reply.call_args.args[0] == "whatsapp:+919876543210"
+        assert "Received" in mock_reply.call_args.args[1]
 
 
 class TestProcessWebhookBackground:

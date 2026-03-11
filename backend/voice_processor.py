@@ -4,20 +4,15 @@ from requests.auth import HTTPBasicAuth
 import uuid
 import asyncio
 from groq import AsyncGroq
-from dotenv import load_dotenv
-
-load_dotenv()
-
-from dotenv import dotenv_values
+from env_utils import get_env_value
 
 class VoiceProcessor:
     def __init__(self):
         pass
 
     def _download_twilio_media_sync(self, media_url: str, output_path: str):
-        env = dotenv_values(".env")
-        twilio_sid = env.get("TWILIO_ACCOUNT_SID")
-        twilio_auth = env.get("TWILIO_AUTH_TOKEN")
+        twilio_sid = get_env_value("TWILIO_ACCOUNT_SID")
+        twilio_auth = get_env_value("TWILIO_AUTH_TOKEN")
         
         if not twilio_sid or not twilio_auth:
             raise ValueError("Missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN")
@@ -43,8 +38,7 @@ class VoiceProcessor:
             await asyncio.to_thread(self._download_twilio_media_sync, media_url, temp_filename)
             
             # Step 2: Transcribe using Whisper
-            env = dotenv_values(".env")
-            groq_key = env.get("GROQ_API_KEY")
+            groq_key = get_env_value("GROQ_API_KEY")
             if not groq_key:
                 raise ValueError("Missing GROQ_API_KEY in .env")
                 

@@ -57,6 +57,14 @@ class TestFormatReply:
         reply = format_reply("hi", "RATE_LIMITED")
         assert "⏳" in reply
 
+    def test_received_english(self):
+        reply = format_reply("en", "RECEIVED")
+        assert "Received" in reply
+
+    def test_received_hindi(self):
+        reply = format_reply("hi", "RECEIVED")
+        assert "मैसेज" in reply
+
     def test_onboarding_english(self):
         reply = format_reply("en", "ONBOARDING")
         assert "Welcome" in reply

@@ -2,8 +2,9 @@
 import os
 import logging
 from typing import Optional
-from fastapi import Depends, HTTPException, Header, Request
+from fastapi import Depends, HTTPException, Header, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from env_utils import get_env_value
 
 API_KEY = os.getenv("API_KEY", "")
 security = HTTPBearer(auto_error=False)
@@ -11,9 +12,12 @@ security = HTTPBearer(auto_error=False)
 
 async def get_jwt_token(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    x_api_key: str = Header(default=""),
 ) -> Optional[str]:
     if credentials:
         return credentials.credentials
+    if API_KEY and x_api_key == API_KEY:
+        return "service-role-api-key"
     return None
 
 
@@ -30,9 +34,24 @@ async def verify_api_key(
         raise HTTPException(status_code=403, detail="Invalid API key or missing Authentication")
 
 
-def verify_twilio_signature(request: Request, form_data: dict) -> bool:
-    from dotenv import dotenv_values
+async def require_authenticated_request(
+    x_api_key: str = Header(default=""),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Reject requests that do not present either a bearer token or the server API key."""
+    if credentials and credentials.credentials:
+        return
 
+    if API_KEY and x_api_key == API_KEY:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required",
+    )
+
+
+def verify_twilio_signature(request: Request, form_data: dict) -> bool:
     # Reconstruct the public URL (vital for ngrok/proxies)
     forwarded_proto = request.headers.get("x-forwarded-proto")
     forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
@@ -55,10 +74,7 @@ def verify_twilio_signature(request: Request, form_data: dict) -> bool:
         return False
 
     # Read from system env (Railway/Docker) first, fall back to .env file
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
-    if not auth_token:
-        env = dotenv_values(".env")
-        auth_token = env.get("TWILIO_AUTH_TOKEN", "")
+    auth_token = get_env_value("TWILIO_AUTH_TOKEN")
     if not auth_token:
         logging.error("Missing TWILIO_AUTH_TOKEN. Cannot verify signature.")
         return False
@@ -76,21 +92,23 @@ def verify_twilio_signature(request: Request, form_data: dict) -> bool:
 
 
 def send_whatsapp_reply(to: str, body: str):
-    """Send a WhatsApp reply via Twilio. Silently fails if not configured."""
-    from dotenv import dotenv_values
-
-    env = dotenv_values(".env")
-    account_sid = env.get("TWILIO_ACCOUNT_SID", "")
-    auth_token = env.get("TWILIO_AUTH_TOKEN", "")
-    whatsapp_from = env.get("TWILIO_WHATSAPP_FROM", "")
+    """Send a WhatsApp reply via Twilio and report whether it succeeded."""
+    account_sid = get_env_value("TWILIO_ACCOUNT_SID")
+    auth_token = get_env_value("TWILIO_AUTH_TOKEN")
+    whatsapp_from = get_env_value("TWILIO_WHATSAPP_FROM")
 
     if not account_sid or not auth_token or not whatsapp_from:
         logging.error(f"Cannot send WhatsApp reply. Missing Twilio credentials. Message: {body}")
-        return
+        return False
+
+    if to and not to.startswith("whatsapp:"):
+        to = f"whatsapp:{to}"
     try:
         from twilio.rest import Client
 
         client = Client(account_sid, auth_token)
         client.messages.create(body=body, from_=whatsapp_from, to=to)
+        return True
     except Exception as e:
         logging.error(f"Failed to send WhatsApp reply: {e}")
+        return False

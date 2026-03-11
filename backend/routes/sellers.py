@@ -8,7 +8,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from schemas import SellerProfileResponse, SellerProfileUpdateResponse
-from routes.auth import get_jwt_token, send_whatsapp_reply
+from routes.auth import get_jwt_token, send_whatsapp_reply, require_authenticated_request
 from db import save_seller_profile, get_seller_profile, log_activity
 
 limiter = Limiter(key_func=get_remote_address)
@@ -25,7 +25,11 @@ class SellerProfileUpdate(BaseModel):
     low_stock_alerts: Optional[bool] = None
 
 
-@router.get("/api/seller/{seller_id}/profile", response_model=SellerProfileResponse)
+@router.get(
+    "/api/seller/{seller_id}/profile",
+    response_model=SellerProfileResponse,
+    dependencies=[Depends(require_authenticated_request)],
+)
 async def get_profile(
     seller_id: str, token: Optional[str] = Depends(get_jwt_token)
 ):
@@ -36,7 +40,11 @@ async def get_profile(
     return {"profile": profile}
 
 
-@router.put("/api/seller/{seller_id}/profile", response_model=SellerProfileUpdateResponse)
+@router.put(
+    "/api/seller/{seller_id}/profile",
+    response_model=SellerProfileUpdateResponse,
+    dependencies=[Depends(require_authenticated_request)],
+)
 @limiter.limit("30/minute")
 async def update_profile(
     request: Request,
@@ -98,5 +106,5 @@ async def update_profile(
 
 
 # --- Register handlers on v1_router for /api/v1/* versioned paths ---
-v1_router.get("/seller/{seller_id}/profile")(get_profile)
-v1_router.put("/seller/{seller_id}/profile")(update_profile)
+v1_router.get("/seller/{seller_id}/profile", dependencies=[Depends(require_authenticated_request)])(get_profile)
+v1_router.put("/seller/{seller_id}/profile", dependencies=[Depends(require_authenticated_request)])(update_profile)

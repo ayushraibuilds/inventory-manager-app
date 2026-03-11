@@ -4,7 +4,7 @@ import uuid
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
 from typing import Optional
 
-from routes.auth import get_jwt_token
+from routes.auth import get_jwt_token, require_authenticated_request
 from db import get_catalog, save_catalog, log_activity
 
 router = APIRouter(tags=["images"])
@@ -12,7 +12,7 @@ router = APIRouter(tags=["images"])
 MAX_IMAGE_SIZE = 2 * 1024 * 1024  # 2 MB
 
 
-@router.post("/api/catalog/item/{item_id}/image")
+@router.post("/api/catalog/item/{item_id}/image", dependencies=[Depends(require_authenticated_request)])
 async def upload_item_image(
     item_id: str,
     seller_id: str = Form(...),

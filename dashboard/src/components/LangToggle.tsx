@@ -1,15 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Languages } from "lucide-react";
 import { Lang, getStoredLang, setStoredLang } from "@/lib/i18n";
 
 export default function LangToggle({ onChange }: { onChange?: (lang: Lang) => void }) {
-    const [lang, setLang] = useState<Lang>("en");
-
-    useEffect(() => {
-        setLang(getStoredLang());
-    }, []);
+    const [lang, setLang] = useState<Lang>(() => getStoredLang());
 
     const toggle = () => {
         const next: Lang = lang === "en" ? "hi" : "en";

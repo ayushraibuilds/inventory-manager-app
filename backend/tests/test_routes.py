@@ -39,6 +39,13 @@ def client():
     return TestClient(app, headers={"X-API-Key": "test-api-key"})
 
 
+@pytest.fixture
+def client_no_auth():
+    from fastapi.testclient import TestClient
+    from server import app
+    return TestClient(app)
+
+
 class TestHealthEndpoint:
     def test_health_returns_200(self, client):
         # Patch the LLM check in health to avoid real API call
@@ -69,6 +76,44 @@ class TestCatalogEndpoints:
     def test_get_catalog_with_search(self, client):
         response = client.get("/api/catalog?search=atta")
         assert response.status_code == 200
+
+    def test_get_catalog_requires_auth(self, client_no_auth):
+        response = client_no_auth.get("/api/catalog?seller_id=test-seller")
+        assert response.status_code == 401
+
+    def test_get_catalog_search_happens_before_pagination(self, client):
+        mock_catalog = {
+            "bpp/catalog": {
+                "bpp/providers": [
+                    {
+                        "items": [
+                            {
+                                "id": "1",
+                                "descriptor": {"name": "Salt"},
+                                "price": {"value": "10"},
+                                "quantity": {"available": {"count": 5}},
+                                "category_id": "Grocery",
+                            },
+                            {
+                                "id": "2",
+                                "descriptor": {"name": "Rice"},
+                                "price": {"value": "50"},
+                                "quantity": {"available": {"count": 3}},
+                                "category_id": "Grocery",
+                            },
+                        ]
+                    }
+                ]
+            }
+        }
+        with patch("routes.catalog.get_catalog", return_value=mock_catalog):
+            response = client.get(
+                "/api/catalog?seller_id=test-seller&search=rice&limit=1&offset=0"
+            )
+        assert response.status_code == 200
+        items = response.json()["bpp/catalog"]["bpp/providers"][0]["items"]
+        assert len(items) == 1
+        assert items[0]["descriptor"]["name"] == "Rice"
 
     def test_create_item_returns_success(self, client):
         response = client.post(
@@ -142,6 +187,13 @@ class TestSellersEndpoint:
         data = response.json()
         assert "profile" in data
 
+    def test_update_profile_requires_auth(self, client_no_auth):
+        response = client_no_auth.put(
+            "/api/seller/test-seller/profile",
+            json={"store_name": "Hijack Store"},
+        )
+        assert response.status_code == 401
+
 
 class TestOrdersEndpoint:
     def test_list_orders_returns_200(self, client):
@@ -151,7 +203,7 @@ class TestOrdersEndpoint:
         assert "orders" in data
 
     def test_create_order_returns_success(self, client):
-        with patch("routes.orders.send_whatsapp_reply"):
+        with patch("routes.orders.send_whatsapp_reply") as mock_reply:
             response = client.post(
                 "/api/orders",
                 json={
@@ -166,6 +218,8 @@ class TestOrdersEndpoint:
         data = response.json()
         assert data["status"] == "success"
         assert "order_id" in data
+        mock_reply.assert_called_once()
+        assert mock_reply.call_args.args[0] == "+1234567890"
 
 
 class TestActivityEndpoint:
@@ -174,3 +228,26 @@ class TestActivityEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert "logs" in data
+
+
+class TestAuthHelpers:
+    def test_send_whatsapp_reply_uses_runtime_env(self, monkeypatch):
+        monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC_runtime")
+        monkeypatch.setenv("TWILIO_AUTH_TOKEN", "runtime-token")
+        monkeypatch.setenv("TWILIO_WHATSAPP_FROM", "whatsapp:+15551234567")
+
+        from routes.auth import send_whatsapp_reply
+
+        with patch("twilio.rest.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value = mock_client
+
+            ok = send_whatsapp_reply("+15557654321", "hello")
+
+        assert ok is True
+        mock_client_cls.assert_called_once_with("AC_runtime", "runtime-token")
+        mock_client.messages.create.assert_called_once_with(
+            body="hello",
+            from_="whatsapp:+15551234567",
+            to="whatsapp:+15557654321",
+        )

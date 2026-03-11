@@ -6,14 +6,13 @@ llama-3.2-90b-vision-preview, and returns structured CatalogExtraction.
 """
 import base64
 import logging
-import os
 import uuid
 
 import requests
 from requests.auth import HTTPBasicAuth
-from dotenv import dotenv_values
 from groq import Groq
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from env_utils import get_env_value
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +22,8 @@ VISION_MODEL = "llama-3.2-90b-vision-preview"
 
 def _download_twilio_image(media_url: str) -> bytes:
     """Download an image from Twilio's media URL with authentication."""
-    env = dotenv_values(".env")
-    twilio_sid = env.get("TWILIO_ACCOUNT_SID", "")
-    twilio_auth = env.get("TWILIO_AUTH_TOKEN", "")
+    twilio_sid = get_env_value("TWILIO_ACCOUNT_SID")
+    twilio_auth = get_env_value("TWILIO_AUTH_TOKEN")
 
     if not twilio_sid or not twilio_auth:
         raise ValueError("Missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN in .env")
@@ -49,8 +47,7 @@ def _download_twilio_image(media_url: str) -> bytes:
 )
 def _call_vision_api(image_b64: str, lang_code: str = "en") -> dict:
     """Send an image to Groq Vision and get structured product extraction."""
-    env = dotenv_values(".env")
-    groq_key = env.get("GROQ_API_KEY", "")
+    groq_key = get_env_value("GROQ_API_KEY")
     if not groq_key:
         raise ValueError("Missing GROQ_API_KEY in .env")
 

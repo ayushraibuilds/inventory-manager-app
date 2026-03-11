@@ -282,7 +282,7 @@ def generate_beckn_catalog(state: AgentState) -> Dict[str, Any]:
     extracted_data = state.get("extracted_product_entities")
     
     # 1. Fetch their past inventory from SQLite
-    existing_catalog = get_catalog(seller_id)
+    existing_catalog = get_catalog(seller_id, service_role=True)
     
     existing_items: List[Dict[str, Any]] = []
     try:
@@ -348,6 +348,7 @@ def generate_beckn_catalog(state: AgentState) -> Dict[str, Any]:
                 md["name"] = new_name
                 md["short_desc"] = f"{new_total} {new_unit} of {new_name}"
                 matched_item["descriptor"] = md
+                matched_item["unit"] = new_unit
                 if hasattr(item, 'category_id'):
                     matched_item["category_id"] = item.category_id
             else:
@@ -367,7 +368,8 @@ def generate_beckn_catalog(state: AgentState) -> Dict[str, Any]:
                         "available": {
                             "count": new_qty
                         }
-                    }
+                    },
+                    "unit": new_unit,
                 }
                 existing_items.append(beckn_item)
 
@@ -387,15 +389,17 @@ def generate_beckn_catalog(state: AgentState) -> Dict[str, Any]:
     }
     
     # 3. Save the updated master catalog back to the database
-    save_catalog(seller_id, updated_catalog)
-    
-    return {"ondc_beckn_json": updated_catalog}
+    saved = save_catalog(seller_id, updated_catalog, service_role=True)
+    if not saved:
+        raise RuntimeError("CATALOG_SAVE_ERROR")
+
+    return {"ondc_beckn_json": updated_catalog, "catalog_saved": True}
 
 def update_item(state: AgentState) -> Dict[str, Any]:
     seller_id = state.get("seller_id", "unknown_seller")
     raw_input = state.get("raw_whatsapp_input", "")
     
-    existing_catalog = get_catalog(seller_id)
+    existing_catalog = get_catalog(seller_id, service_role=True)
     try:
         items = existing_catalog["bpp/catalog"]["bpp/providers"][0].get("items", [])
     except (KeyError, IndexError):
@@ -442,8 +446,10 @@ def update_item(state: AgentState) -> Dict[str, Any]:
                 break
                 
         existing_catalog["bpp/catalog"]["bpp/providers"][0]["items"] = items
-        save_catalog(seller_id, existing_catalog)
-        return {"ondc_beckn_json": existing_catalog}
+        saved = save_catalog(seller_id, existing_catalog, service_role=True)
+        if not saved:
+            raise RuntimeError("CATALOG_SAVE_ERROR")
+        return {"ondc_beckn_json": existing_catalog, "catalog_saved": True}
         
     return {"translated_text": "Could not identify the item to update."}
 
@@ -452,7 +458,7 @@ def delete_item(state: AgentState) -> Dict[str, Any]:
     raw_input = state.get("raw_whatsapp_input", "")
     
     # Fetch the master catalog from SQLite
-    existing_catalog = get_catalog(seller_id)
+    existing_catalog = get_catalog(seller_id, service_role=True)
     try:
         items = existing_catalog["bpp/catalog"]["bpp/providers"][0].get("items", [])
     except (KeyError, IndexError):
@@ -481,8 +487,10 @@ def delete_item(state: AgentState) -> Dict[str, Any]:
         updated_items = [item for item in items if item["id"] != target_item_id]
         existing_catalog["bpp/catalog"]["bpp/providers"][0]["items"] = updated_items
         
-        save_catalog(seller_id, existing_catalog)
-        return {"ondc_beckn_json": existing_catalog}
+        saved = save_catalog(seller_id, existing_catalog, service_role=True)
+        if not saved:
+            raise RuntimeError("CATALOG_SAVE_ERROR")
+        return {"ondc_beckn_json": existing_catalog, "catalog_saved": True}
         
     return {"translated_text": "Could not match the item to delete."}
 

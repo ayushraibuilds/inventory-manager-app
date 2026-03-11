@@ -9,8 +9,8 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from schemas import OrderCreateResponse, OrdersResponse, OrderStatusResponse
-from routes.auth import get_jwt_token, verify_api_key, send_whatsapp_reply
-from db import create_order, get_orders, update_order_status, log_activity
+from routes.auth import get_jwt_token, verify_api_key, send_whatsapp_reply, require_authenticated_request
+from db import create_order, get_orders, update_order_status, log_activity, get_seller_profile
 
 limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(tags=["orders"])          # /api/* — backward compat
@@ -72,12 +72,19 @@ async def place_order(
         f"Total: ₹{order.total_amount}\n\n"
         f"Reply *accept* or *reject*."
     )
-    await asyncio.to_thread(send_whatsapp_reply, order.seller_id, notification)  # type: ignore
+    seller_profile = get_seller_profile(order.seller_id, jwt_token=token)
+    seller_phone = seller_profile.get("phone", "")
+    if seller_phone:
+        await asyncio.to_thread(send_whatsapp_reply, seller_phone, notification)  # type: ignore
 
     return {"status": "success", "order_id": order_id}
 
 
-@router.get("/api/orders", response_model=OrdersResponse)
+@router.get(
+    "/api/orders",
+    response_model=OrdersResponse,
+    dependencies=[Depends(require_authenticated_request)],
+)
 async def list_orders(
     token: Optional[str] = Depends(get_jwt_token),
     seller_id: Optional[str] = None,
@@ -121,13 +128,15 @@ async def change_order_status(
         raise HTTPException(status_code=404, detail="Order not found")
 
     short_id = order_id[:8]  # type: ignore
+    orders = get_orders(limit=1, search=order_id, jwt_token=token)
+    seller_id = orders[0].get("seller_id", "") if orders else ""
     log_activity(
-        "", f"ORDER_{body.status}", details=f"Order {short_id}", jwt_token=token
+        seller_id, f"ORDER_{body.status}", details=f"Order {short_id}", jwt_token=token
     )
     return {"status": "success", "order_status": body.status}
 
 
 # --- Register handlers on v1_router for /api/v1/* versioned paths ---
 v1_router.post("/orders", dependencies=[Depends(verify_api_key)])(place_order)
-v1_router.get("/orders")(list_orders)
+v1_router.get("/orders", dependencies=[Depends(require_authenticated_request)])(list_orders)
 v1_router.put("/orders/{order_id}/status", dependencies=[Depends(verify_api_key)])(change_order_status)

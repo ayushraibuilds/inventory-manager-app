@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Clock, Plus, Pencil, Trash2, MessageSquare, AlertCircle } from "lucide-react";
-import { toast } from "sonner";
+import { useAuth } from "@/components/AuthProvider";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -61,12 +61,16 @@ interface ActivityLogProps {
 }
 
 export default function ActivityLog({ selectedSeller }: ActivityLogProps) {
+    const { token } = useAuth();
     const [logs, setLogs] = useState<ActivityEntry[]>([]);
 
     const fetchLogs = useCallback(async () => {
+        if (!token) return;
         try {
             const sellerParam = selectedSeller !== "all" ? `&seller_id=${encodeURIComponent(selectedSeller)}` : "";
-            const res = await fetch(`${API_URL}/api/activity?limit=20${sellerParam}`);
+            const res = await fetch(`${API_URL}/api/activity?limit=20${sellerParam}`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
 
             if (res.status === 429) {
                 // Silently skip to avoid spamming since it's a 5s bg poll
@@ -79,12 +83,17 @@ export default function ActivityLog({ selectedSeller }: ActivityLogProps) {
         } catch {
             // silently fail
         }
-    }, [selectedSeller]);
+    }, [selectedSeller, token]);
 
     useEffect(() => {
-        fetchLogs();
+        const initialFetch = window.setTimeout(() => {
+            void fetchLogs();
+        }, 0);
         const interval = setInterval(fetchLogs, 5000);
-        return () => clearInterval(interval);
+        return () => {
+            clearTimeout(initialFetch);
+            clearInterval(interval);
+        };
     }, [fetchLogs]);
 
     return (

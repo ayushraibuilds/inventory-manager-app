@@ -54,7 +54,7 @@ export default function OrdersPage() {
     const [dateTo, setDateTo] = useState("");
 
     const fetchOrders = useCallback(async () => {
-        if (!activeSellerId) return;
+        if (!activeSellerId || !token) return;
         try {
             const params = new URLSearchParams();
             params.set("seller_id", activeSellerId);
@@ -63,7 +63,9 @@ export default function OrdersPage() {
             if (dateFrom) params.set("date_from", dateFrom);
             if (dateTo) params.set("date_to", dateTo);
 
-            const res = await fetch(`${API_URL}/api/orders?${params.toString()}`);
+            const res = await fetch(`${API_URL}/api/orders?${params.toString()}`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
             if (res.status === 429) { toast.error("Rate limit exceeded."); return; }
             if (res.ok) {
                 const data = await res.json();
@@ -71,11 +73,11 @@ export default function OrdersPage() {
             }
         } catch { toast.error("Failed to load orders."); }
         finally { setLoading(false); }
-    }, [filterStatus, activeSellerId, searchQuery, dateFrom, dateTo]);
+    }, [filterStatus, activeSellerId, searchQuery, dateFrom, dateTo, token]);
 
     useEffect(() => {
-        if (!isLoading && activeSellerId) fetchOrders();
-    }, [fetchOrders, isLoading, activeSellerId]);
+        if (!isLoading && activeSellerId && token) fetchOrders();
+    }, [fetchOrders, isLoading, activeSellerId, token]);
 
     const updateStatus = async (orderId: string, newStatus: string) => {
         const loadingToast = toast.loading(`Updating to ${newStatus}...`);

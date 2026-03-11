@@ -131,7 +131,7 @@ async def on_search(request: Request, body: SearchRequest):
     seller_id = all_sellers[0] if isinstance(all_sellers[0], str) else all_sellers[0].get("seller_id", "")
 
     try:
-        catalog = get_catalog(seller_id)
+        catalog = get_catalog(seller_id, service_role=True)
         profile = get_seller_profile(seller_id)
     except Exception as e:
         logger.error(f"Failed to fetch catalog for {seller_id}: {e}")

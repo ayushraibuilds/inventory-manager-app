@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import { Toaster, toast } from "sonner";
-import { Activity, Truck, LogOut, BarChart3, User, ShoppingCart, Upload, DollarSign, Download, Wifi, WifiOff, FileText } from "lucide-react";
+import { LogOut, BarChart3, User, ShoppingCart, Upload, DollarSign, Download, Wifi, WifiOff, FileText } from "lucide-react";
 import Link from "next/link";
 import StatCards from "../../components/StatCards";
 import InventoryTable, { CatalogItem } from "../../components/InventoryTable";
@@ -38,9 +38,6 @@ export default function Dashboard() {
 
   // Delete confirmation state
   const [deleteTarget, setDeleteTarget] = useState<{ items: CatalogItem[]; bulk: boolean } | null>(null);
-
-  // SSE ref
-  const eventSourceRef = useRef<EventSource | null>(null);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -97,19 +94,14 @@ export default function Dashboard() {
             quantity?: { available?: { count?: number } };
             descriptor?: { name?: string; short_desc?: string };
           }
-          const formattedItems = providers[0].items.map((item: RawCatalogItem) => {
-            let unitFallback = "unit";
-            if (item.descriptor?.short_desc) {
-              const parts = item.descriptor.short_desc.split(" ");
-              if (parts.length > 1) unitFallback = parts[1];
-            }
+          const formattedItems = providers[0].items.map((item: RawCatalogItem & { unit?: string; category_id?: string }) => {
             return {
               id: item.id,
               name: item.descriptor?.name || "Unknown",
               price: item.price?.value || "0",
               quantity: item.quantity?.available?.count || 0,
-              unit: unitFallback,
-              category_id: (item as any).category_id || "Grocery"
+              unit: item.unit || "piece",
+              category_id: item.category_id || "Grocery"
             };
           });
           setItems(formattedItems);
@@ -123,57 +115,17 @@ export default function Dashboard() {
       setLoading(false);
       setIsRefreshing(false);
     }
-  }, [currentPage, activeSellerId]);
+  }, [currentPage, activeSellerId, token]);
 
-  // SSE
   useEffect(() => {
     if (!activeSellerId || isLoading) return;
-    fetchCatalog();
-    const es = new EventSource(`${API_URL}/api/catalog/stream?seller_id=${encodeURIComponent(activeSellerId)}`);
-    eventSourceRef.current = es;
-
-    es.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.error) return;
-        setTotalProducts(data.total_count || 0);
-        setTotalValue(data.total_value || 0);
-        setLowStockCount(data.low_stock_count || 0);
-        if (data.items) {
-          const offset = (currentPage - 1) * LIMIT;
-          const paginatedItems = data.items.slice(offset, offset + LIMIT);
-          setTotalPages(Math.ceil((data.total_count || 0) / LIMIT) || 1);
-          const formattedItems = paginatedItems.map((item: any) => {
-            let unitFallback = "unit";
-            if (item.descriptor?.short_desc) {
-              const parts = item.descriptor.short_desc.split(" ");
-              if (parts.length > 1) unitFallback = parts[1];
-            }
-            return {
-              id: item.id,
-              name: item.descriptor?.name || "Unknown",
-              price: item.price?.value || "0",
-              quantity: item.quantity?.available?.count || 0,
-              unit: unitFallback,
-              category_id: item.category_id || "Grocery"
-            };
-          });
-          setItems(formattedItems);
-          setLoading(false);
-        }
-      } catch { /* heartbeat */ }
-    };
-    es.onerror = () => {
-      console.warn("SSE connection error. Reconnecting...");
-      es.close();
-      // Wait before trying to reconnect to avoid spamming the server
-      setTimeout(() => {
-        if (activeSellerId && !isLoading) fetchCatalog(false, currentPage);
-      }, 5000);
-    };
+    void fetchCatalog(false, currentPage);
+    const interval = window.setInterval(() => {
+      void fetchCatalog(false, currentPage);
+    }, 5000);
 
     return () => {
-      es.close();
+      window.clearInterval(interval);
     };
   }, [activeSellerId, currentPage, isLoading, fetchCatalog]);
 
@@ -366,13 +318,24 @@ export default function Dashboard() {
 
           {/* CSV Export */}
           <button
-            onClick={() => {
-              const url = `${API_URL}/api/catalog/export/csv?seller_id=${encodeURIComponent(activeSellerId)}`;
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = "catalog.csv";
-              a.click();
-              toast.success("Downloading catalog CSV...");
+            onClick={async () => {
+              try {
+                const res = await fetch(
+                  `${API_URL}/api/catalog/export/csv?seller_id=${encodeURIComponent(activeSellerId)}`,
+                  { headers: { Authorization: `Bearer ${token}` } }
+                );
+                if (!res.ok) throw new Error("Export failed");
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "catalog.csv";
+                a.click();
+                URL.revokeObjectURL(url);
+                toast.success("Downloading catalog CSV...");
+              } catch {
+                toast.error("Failed to export catalog.");
+              }
             }}
             className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-4 py-1.5 rounded-full font-semibold text-sm hover:bg-emerald-500/20 transition-all"
           >

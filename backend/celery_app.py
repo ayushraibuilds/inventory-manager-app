@@ -48,7 +48,7 @@ def check_low_stock_alerts_task():
         if not profile.get("low_stock_alerts"):
             continue
 
-        catalog = get_catalog(sid)
+        catalog = get_catalog(sid, service_role=True)
         try:
             items = (
                 catalog.get("bpp/catalog", {})
@@ -82,11 +82,14 @@ def check_low_stock_alerts_task():
                 + "\n".join(low_stock_items)
                 + "\n\n_Update stock via WhatsApp or dashboard._"
             )
-            send_whatsapp_reply(sid, alert)
+            phone = profile.get("phone", "")
+            if phone:
+                send_whatsapp_reply(phone, alert)
             log_activity(
                 sid,
                 "LOW_STOCK_ALERT",
                 details=f"{len(low_stock_items)} items low",
+                service_role=True,
             )
 
 @celery_app.task

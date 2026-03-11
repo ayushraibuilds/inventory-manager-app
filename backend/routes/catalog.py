@@ -14,7 +14,7 @@ from slowapi.util import get_remote_address
 
 from schemas import PaginatedCatalogResponse, PriceCheckResponse
 
-from routes.auth import get_jwt_token, verify_api_key
+from routes.auth import get_jwt_token, verify_api_key, require_authenticated_request
 from db import (
     get_all_catalogs,
     get_catalog,
@@ -116,8 +116,16 @@ async def invalidate_catalog_cache(seller_id: str):
         logger.warning(f"Redis invalidation skipped (likely offline): {e}")
 
 # --- Catalog endpoints ---
-@router.get("/api/catalog", response_model=PaginatedCatalogResponse)
-@v1_router.get("/catalog", response_model=PaginatedCatalogResponse)
+@router.get(
+    "/api/catalog",
+    response_model=PaginatedCatalogResponse,
+    dependencies=[Depends(require_authenticated_request)],
+)
+@v1_router.get(
+    "/catalog",
+    response_model=PaginatedCatalogResponse,
+    dependencies=[Depends(require_authenticated_request)],
+)
 async def get_master_catalog(
     token: Optional[str] = Depends(get_jwt_token),
     limit: int = 50,
@@ -158,8 +166,6 @@ async def get_master_catalog(
         except (KeyError, IndexError):
             continue
 
-    total_count = len(all_items)
-
     total_value: float = 0.0
     low_stock_count: int = 0
     for i in all_items:
@@ -172,14 +178,13 @@ async def get_master_catalog(
         except (ValueError, TypeError, AttributeError):
             pass
 
-    paginated_items: List[Dict[str, Any]] = all_items[offset : offset + limit]  # type: ignore
-
     # Search
+    filtered_items = all_items
     if search:
         search_lower = search.lower()
-        paginated_items = [
+        filtered_items = [
             i
-            for i in paginated_items
+            for i in filtered_items
             if search_lower
             in str(i.get("descriptor", {}).get("name") or "").lower()
             or search_lower in str(i.get("category_id") or "").lower()
@@ -189,21 +194,21 @@ async def get_master_catalog(
     if sort_by:
         reverse = sort_order.lower() == "desc"
         if sort_by == "name":
-            paginated_items.sort(
+            filtered_items.sort(
                 key=lambda x: str(
                     x.get("descriptor", {}).get("name") or ""
                 ).lower(),
                 reverse=reverse,
             )
         elif sort_by == "price":
-            paginated_items.sort(
+            filtered_items.sort(
                 key=lambda x: float(
                     str(x.get("price", {}).get("value") or 0)
                 ),
                 reverse=reverse,
             )
         elif sort_by == "quantity":
-            paginated_items.sort(
+            filtered_items.sort(
                 key=lambda x: int(
                     str(
                         x.get("quantity", {})
@@ -213,6 +218,9 @@ async def get_master_catalog(
                 ),
                 reverse=reverse,
             )
+
+    total_count = len(filtered_items)
+    paginated_items: List[Dict[str, Any]] = filtered_items[offset : offset + limit]  # type: ignore
 
     return {
         "bpp/catalog": {
@@ -235,7 +243,7 @@ async def get_master_catalog(
 
 
 # --- SSE Stream ---
-@router.get("/api/catalog/stream")
+@router.get("/api/catalog/stream", dependencies=[Depends(require_authenticated_request)])
 async def catalog_stream(
     seller_id: Optional[str] = None,
     token: Optional[str] = Depends(get_jwt_token),
@@ -312,7 +320,7 @@ async def catalog_stream(
 
 
 # --- Sellers list ---
-@router.get("/api/sellers")
+@router.get("/api/sellers", dependencies=[Depends(require_authenticated_request)])
 async def list_sellers(token: Optional[str] = Depends(get_jwt_token)):
     """Returns a list of all seller IDs known to the system."""
     seller_ids = await asyncio.to_thread(get_all_seller_ids)
@@ -320,7 +328,7 @@ async def list_sellers(token: Optional[str] = Depends(get_jwt_token)):
 
 
 # --- Activity Log ---
-@router.get("/api/activity")
+@router.get("/api/activity", dependencies=[Depends(require_authenticated_request)])
 async def get_activity(
     limit: int = 50,
     seller_id: Optional[str] = None,
@@ -332,7 +340,7 @@ async def get_activity(
 
 
 # --- Analytics ---
-@router.get("/api/analytics")
+@router.get("/api/analytics", dependencies=[Depends(require_authenticated_request)])
 async def get_analytics(
     seller_id: Optional[str] = None,
     token: Optional[str] = Depends(get_jwt_token),
@@ -436,6 +444,7 @@ async def create_item(
         },
         "price": {"currency": "INR", "value": item.price},
         "quantity": {"available": {"count": item.quantity}},
+        "unit": item.unit,
     }
     items.append(new_item)
 
@@ -501,10 +510,13 @@ async def update_item(
             qty = i.get("quantity", {}).get("available", {}).get("count", 0)
             name = i.get("descriptor", {}).get("name", "Unknown")
             unit = item.unit if item.unit else "piece"
+            existing_unit = str(i.get("unit", "") or "")
+            resolved_unit = unit or existing_unit or "piece"
 
             if "descriptor" not in i:
                 i["descriptor"] = {}
-            i["descriptor"]["short_desc"] = f"{qty} {unit} of {name}"
+            i["descriptor"]["short_desc"] = f"{qty} {resolved_unit} of {name}"
+            i["unit"] = resolved_unit
             log_activity(
                 item.seller_id,
                 "ITEM_UPDATED",
@@ -549,7 +561,7 @@ async def delete_item(
     catalog["bpp/catalog"]["bpp/providers"][0]["items"] = updated_items
     save_catalog(clean_seller_id, catalog, jwt_token=token)
     await invalidate_catalog_cache(clean_seller_id)
-    log_activity(clean_seller_id, "ITEM_DELETED", deleted_name)
+    log_activity(clean_seller_id, "ITEM_DELETED", deleted_name, jwt_token=token)
     return {
         "status": "success",
         "message": f"Removed {deleted_name} from your catalog",
@@ -631,15 +643,17 @@ async def import_catalog(
         if not clean_name:
             continue
 
+        short_desc = f"{item.quantity} {item.unit} of {clean_name}"
         new_item = {
             "id": str(uuid.uuid4()),
-            "descriptor": {"name": clean_name},
+            "descriptor": {"name": clean_name, "short_desc": short_desc},
             "price": {"currency": "INR", "value": item.price},
             "quantity": {
                 "available": {"count": item.quantity},
                 "unitized": {"measure": {"unit": item.unit, "value": "1"}},
             },
             "category_id": item.category_id,
+            "unit": item.unit,
         }
         existing_items.append(new_item)
         imported_count += 1
@@ -731,15 +745,17 @@ async def import_csv(
             errors.append(f"Row {row_num}: invalid price/quantity")
             continue
 
+        short_desc = f"{qty_val} {unit} of {clean_name}"
         new_item = {
             "id": str(uuid.uuid4()),
-            "descriptor": {"name": clean_name},
+            "descriptor": {"name": clean_name, "short_desc": short_desc},
             "price": {"currency": "INR", "value": price_val},
             "quantity": {
                 "available": {"count": qty_val},
                 "unitized": {"measure": {"unit": unit, "value": "1"}},
             },
             "category_id": category,
+            "unit": unit,
         }
         existing_items.append(new_item)
         imported_count += 1
@@ -766,7 +782,7 @@ async def import_csv(
 # --- Enriched Health Check ---
 @router.get("/health")
 @v1_router.get("/health")
-async def health_check():
+async def health_check(deep: bool = False):
     """Returns service health with dependency status."""
     result: Dict[str, Any] = {
         "status": "healthy",
@@ -778,29 +794,30 @@ async def health_check():
     # Check Supabase
     try:
         from db import get_supabase_client
-        sb = get_supabase_client()
+        sb = get_supabase_client(use_service_role=True)
         sb.table("profiles").select("id").limit(1).execute()
         result["supabase"] = "ok"
     except Exception as e:
         result["supabase"] = f"error: {str(e)[:80]}"
         result["status"] = "degraded"
 
-    # Check Groq LLM
-    try:
-        from langchain_groq import ChatGroq
-        llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
-        llm.invoke("ping")
-        result["llm"] = "ok"
-    except Exception as e:
-        result["llm"] = f"error: {str(e)[:80]}"
-        result["status"] = "degraded"
+    if deep:
+        try:
+            from langchain_groq import ChatGroq
+            llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+            llm.invoke("ping")
+            result["llm"] = "ok"
+        except Exception as e:
+            result["llm"] = f"error: {str(e)[:80]}"
+            result["status"] = "degraded"
+    else:
+        result["llm"] = "not_checked"
 
-    # Check Twilio
     twilio_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
     twilio_token = os.getenv("TWILIO_AUTH_TOKEN", "")
     if not twilio_sid or not twilio_token:
         result["twilio"] = "not_configured"
-    else:
+    elif deep:
         try:
             from twilio.rest import Client
             client = Client(twilio_sid, twilio_token)
@@ -809,11 +826,15 @@ async def health_check():
         except Exception as e:
             result["twilio"] = f"error: {str(e)[:80]}"
             result["status"] = "degraded"
+    else:
+        result["twilio"] = "configured"
+
+    result["mode"] = "deep" if deep else "basic"
 
     return result
 
 
-@router.get("/catalog/price-check")
+@router.get("/catalog/price-check", dependencies=[Depends(require_authenticated_request)])
 async def price_check_catalog(seller_id: str, token: str = Depends(get_jwt_token)):
     """Return price intelligence for all items in a seller's catalog."""
     from price_reference import get_catalog_price_report
@@ -839,7 +860,7 @@ async def price_check_catalog(seller_id: str, token: str = Depends(get_jwt_token
 
 # --- CSV Export ---
 
-@router.get("/api/catalog/export/csv")
+@router.get("/api/catalog/export/csv", dependencies=[Depends(require_authenticated_request)])
 async def export_catalog_csv(seller_id: str, token: str = Depends(get_jwt_token)):
     """Export the full catalog as a downloadable CSV file."""
     import csv
@@ -860,16 +881,11 @@ async def export_catalog_csv(seller_id: str, token: str = Depends(get_jwt_token)
         desc = item.get("descriptor", {})
         price = item.get("price", {})
         qty = item.get("quantity", {}).get("available", {}).get("count", 0)
-        unit = ""
-        if desc.get("short_desc"):
-            parts = desc["short_desc"].split(" ")
-            if len(parts) > 1:
-                unit = parts[1]
         writer.writerow([
             desc.get("name", "Unknown"),
             price.get("value", "0"),
             qty,
-            unit or "piece",
+            item.get("unit", "") or "piece",
             item.get("category_id", "Grocery"),
         ])
 
@@ -893,7 +909,7 @@ class BatchPriceUpdate(BaseModel):
     updates: List[BatchPriceItem]
 
 
-@router.post("/api/catalog/batch-price-update")
+@router.post("/api/catalog/batch-price-update", dependencies=[Depends(require_authenticated_request)])
 @limiter.limit("10/minute")
 async def batch_price_update(request: Request, data: BatchPriceUpdate, token: str = Depends(get_jwt_token)):
     """Update prices for multiple items at once (e.g. match market prices)."""
@@ -940,13 +956,13 @@ async def batch_price_update(request: Request, data: BatchPriceUpdate, token: st
 # the same async function with v1_router decorators.
 
 v1_router.get("/catalog")(get_master_catalog)
-v1_router.get("/catalog/stream")(catalog_stream)
-v1_router.get("/sellers")(list_sellers)
-v1_router.get("/activity")(get_activity)
-v1_router.get("/analytics")(get_analytics)
-v1_router.get("/catalog/price-check")(price_check_catalog)
-v1_router.get("/catalog/export/csv")(export_catalog_csv)
-v1_router.post("/catalog/batch-price-update")(batch_price_update)
+v1_router.get("/catalog/stream", dependencies=[Depends(require_authenticated_request)])(catalog_stream)
+v1_router.get("/sellers", dependencies=[Depends(require_authenticated_request)])(list_sellers)
+v1_router.get("/activity", dependencies=[Depends(require_authenticated_request)])(get_activity)
+v1_router.get("/analytics", dependencies=[Depends(require_authenticated_request)])(get_analytics)
+v1_router.get("/catalog/price-check", dependencies=[Depends(require_authenticated_request)])(price_check_catalog)
+v1_router.get("/catalog/export/csv", dependencies=[Depends(require_authenticated_request)])(export_catalog_csv)
+v1_router.post("/catalog/batch-price-update", dependencies=[Depends(require_authenticated_request)])(batch_price_update)
 v1_router.post("/catalog/item", dependencies=[Depends(verify_api_key)])(create_item)
 v1_router.put("/catalog/item/{item_id}", dependencies=[Depends(verify_api_key)])(update_item)
 v1_router.delete("/catalog/item/{item_id}", dependencies=[Depends(verify_api_key)])(delete_item)

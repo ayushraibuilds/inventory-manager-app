@@ -125,18 +125,19 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
         return {"status": "rate_limited"}
 
     # --- Seller Onboarding ---
-    profile = await asyncio.to_thread(get_seller_profile, seller_id)
+    profile = await asyncio.to_thread(get_seller_profile, seller_id, None)
     if not profile.get("store_name"):
         welcome = format_reply(detected_lang, "ONBOARDING")
         await asyncio.to_thread(send_whatsapp_reply, f"whatsapp:{extracted_phone}", welcome)  # type: ignore
         await asyncio.to_thread(
-            log_activity,
-            seller_id,
-            "SELLER_ONBOARDED",
-            "New seller interacted",
-            "",
-            token,
-        )
+        log_activity,
+        seller_id,
+        "SELLER_ONBOARDED",
+        "New seller interacted",
+        "",
+        token,
+        True,
+    )
 
     # --- Audit Trail: Log incoming message ---
     await asyncio.to_thread(
@@ -146,10 +147,14 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
         "",
         raw_message[:500],
         token,
+        True,
     )
 
     # --- Fetch conversation memory ---
     conversation_history = await asyncio.to_thread(get_conversation_history, seller_id, 3, None)
+
+    ack = format_reply(detected_lang, "RECEIVED")
+    await asyncio.to_thread(send_whatsapp_reply, f"whatsapp:{extracted_phone}", ack)  # type: ignore
 
     print("WEBHOOK TRACER: Queuing Agent processing thread")
     from celery_app import process_webhook_task
@@ -188,7 +193,7 @@ async def process_webhook_background(
             if items:
                 # Build catalog entries and merge into seller's catalog
                 import uuid
-                existing_catalog = get_catalog(seller_id)
+                existing_catalog = get_catalog(seller_id, service_role=True)
                 try:
                     existing_items = existing_catalog["bpp/catalog"]["bpp/providers"][0].get("items", [])
                 except (KeyError, IndexError):
@@ -201,20 +206,24 @@ async def process_webhook_background(
                         "descriptor": {"name": item_data["name"], "short_desc": f"{item_data['quantity']} {item_data['unit']} of {item_data['name']}"},
                         "price": {"currency": "INR", "value": str(item_data["price_inr"])},
                         "quantity": {"available": {"count": item_data["quantity"]}},
+                        "unit": item_data["unit"],
                     }
                     existing_items.append(beckn_item)
 
                 updated_catalog = {
                     "bpp/catalog": {"bpp/providers": [{"id": f"provider_{seller_id}", "descriptor": {"name": f"Super Seller: {seller_id}"}, "items": existing_items}]}
                 }
-                save_catalog(seller_id, updated_catalog)
+                saved = save_catalog(seller_id, updated_catalog, service_role=True)
+                if not saved:
+                    raise RuntimeError("CATALOG_SAVE_ERROR")
 
                 names = [f"{i['name']} (₹{i['price_inr']})" for i in items]
                 reply = f"📷 Extracted {len(items)} items from your photo:\n" + "\n".join(f"• {n}" for n in names)
                 reply += f"\n\nYour catalog now has {len(existing_items)} items."
-                log_activity(seller_id, "IMAGE_CATALOG", details=f"{len(items)} items from image")
-                send_whatsapp_reply(f"whatsapp:{extracted_phone}", reply)
-                log_activity(seller_id, "WHATSAPP_SENT", details=reply[:500], jwt_token=token)
+                log_activity(seller_id, "IMAGE_CATALOG", details=f"{len(items)} items from image", service_role=True)
+                sent = send_whatsapp_reply(f"whatsapp:{extracted_phone}", reply)
+                log_action = "WHATSAPP_SENT" if sent else "WHATSAPP_SEND_FAILED"
+                log_activity(seller_id, log_action, details=reply[:500], jwt_token=token, service_role=True)
                 return
         except Exception as e:
             logger.error(f"Image Processing Error: {e}")
@@ -270,29 +279,30 @@ async def process_webhook_background(
                 reply = format_reply(lang, "ADD_SIMPLE", count=item_count)
         except Exception:
             reply = format_reply(lang, "ADD_SIMPLE", count="?")
-        log_activity(seller_id, "ADD_VIA_WHATSAPP", raw_message)
+        log_activity(seller_id, "ADD_VIA_WHATSAPP", raw_message, service_role=True)
     elif intent == "UPDATE":
         reply = format_reply(lang, "UPDATE")
-        log_activity(seller_id, "UPDATE_VIA_WHATSAPP", raw_message)
+        log_activity(seller_id, "UPDATE_VIA_WHATSAPP", raw_message, service_role=True)
     elif intent == "DELETE":
         reply = format_reply(lang, "DELETE")
-        log_activity(seller_id, "DELETE_VIA_WHATSAPP", raw_message)
+        log_activity(seller_id, "DELETE_VIA_WHATSAPP", raw_message, service_role=True)
     elif intent == "FAQ":
         faq_answer = result.get("faq_answer", "")
         reply = format_reply(lang, "FAQ", answer=faq_answer) if faq_answer else format_reply(lang, "UNKNOWN")
-        log_activity(seller_id, "FAQ_VIA_WHATSAPP", raw_message)
+        log_activity(seller_id, "FAQ_VIA_WHATSAPP", raw_message, service_role=True)
     else:
         reply = format_reply(lang, "UNKNOWN")
-        log_activity(seller_id, "UNKNOWN_INTENT", raw_message)
+        log_activity(seller_id, "UNKNOWN_INTENT", raw_message, service_role=True)
 
     # Send reply
-    send_whatsapp_reply(f"whatsapp:{extracted_phone}", reply)
+    sent = send_whatsapp_reply(f"whatsapp:{extracted_phone}", reply)
 
     # --- Audit Trail: Log outgoing reply ---
     log_activity(
         seller_id,
-        "WHATSAPP_SENT",
+        "WHATSAPP_SENT" if sent else "WHATSAPP_SEND_FAILED",
         item_name="",
         details=reply[:500],
         jwt_token=token,
+        service_role=True,
     )
