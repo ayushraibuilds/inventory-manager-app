@@ -3,14 +3,14 @@ import "./globals.css";
 import { AuthProvider } from "@/components/AuthProvider";
 
 export const metadata: Metadata = {
-  title: "ONDC Super Seller — WhatsApp Inventory Dashboard",
+  title: "ONDC Super Seller — WhatsApp Inventory Manager for Sellers",
   description:
-    "Manage your ONDC catalog through WhatsApp voice notes, images, and text. Real-time dashboard with analytics, price intelligence, and order management.",
-  keywords: ["ONDC", "WhatsApp", "inventory", "catalog", "kirana", "India", "seller"],
+    "Manage seller inventory through WhatsApp voice notes, images, and text. Realtime dashboard with analytics, price intelligence, CSV tools, alerts, and catalog activity tracking.",
+  keywords: ["ONDC", "WhatsApp", "inventory", "catalog", "kirana", "India", "seller", "stock management"],
   openGraph: {
     title: "ONDC Super Seller",
     description:
-      "Let Indian shopkeepers manage their ONDC catalog through WhatsApp — in Hindi, English, or Hinglish.",
+      "Let sellers maintain inventory over WhatsApp with voice, image, text, analytics, CSV import/export, and low-stock alerts.",
     type: "website",
     locale: "en_IN",
   },
@@ -18,7 +18,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "ONDC Super Seller",
     description:
-      "WhatsApp-native inventory management for ONDC. Voice, image, and text support.",
+      "WhatsApp-first inventory management for sellers. Voice, image, text, analytics, CSV, pricing, and alerts.",
   },
   robots: { index: true, follow: true },
 };
