@@ -1,14 +1,13 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, Save, Store, MapPin, FileText, Phone, Image, Bell } from "lucide-react";
+import { ArrowLeft, Save, Store, MapPin, FileText, Phone, Image as ImageIcon, Bell } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
 interface SellerProfile {
     seller_id: string;
@@ -215,10 +214,10 @@ export default function SellerProfilePage() {
                         </div>
                     </div>
 
-                    <div>
-                        <label className="flex items-center gap-2 text-sm font-medium text-[var(--text-secondary)] mb-1.5">
-                            <Image className="w-3.5 h-3.5" /> Logo URL
-                        </label>
+                        <div>
+                            <label className="flex items-center gap-2 text-sm font-medium text-[var(--text-secondary)] mb-1.5">
+                                <ImageIcon className="w-3.5 h-3.5" /> Logo URL
+                            </label>
                         <input
                             value={form.logo_url}
                             onChange={e => setForm({ ...form, logo_url: e.target.value })}

@@ -119,12 +119,47 @@ const implementedFeatures = [
   },
 ];
 
+const pricingPlans = [
+  {
+    id: "free",
+    name: "Free",
+    price: "₹0",
+    cadence: "/month",
+    summary: "For sellers getting started with WhatsApp-led inventory control.",
+    points: ["100 products", "100 WhatsApp messages/month", "Basic dashboard"],
+  },
+  {
+    id: "pro",
+    name: "Pro",
+    price: "₹199",
+    cadence: "/month",
+    summary: "For active sellers who need voice notes, image recognition, and unlimited scale.",
+    points: ["Unlimited products", "Voice notes", "Image recognition", "Priority support"],
+  },
+  {
+    id: "enterprise",
+    name: "Enterprise",
+    price: "₹999",
+    cadence: "/month",
+    summary: "For larger operations that need commercial support and deeper integrations.",
+    points: ["Multi-store", "API access", "Custom branding", "ONDC listing support"],
+  },
+];
+
 export default function LandingPage() {
+  const scrollToFeatures = () => {
+    document.getElementById("features")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   return (
     <div className="min-h-screen bg-[var(--bg-primary)] overflow-hidden">
       <nav className="fixed top-0 inset-x-0 z-50 bg-[var(--bg-primary)]/80 backdrop-blur-md border-b border-[var(--border)]">
         <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <Link
+            href="/"
+            aria-label="Go to Super Seller home"
+            className="flex items-center gap-3 rounded-xl transition-opacity hover:opacity-85"
+          >
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-400 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-500/20">
               <Store className="w-4 h-4 text-white" />
             </div>
@@ -134,7 +169,7 @@ export default function LandingPage() {
               </span>
               <p className="text-xs text-[var(--text-muted)]">WhatsApp inventory control for sellers</p>
             </div>
-          </div>
+          </Link>
 
           <div className="flex items-center gap-4">
             <ThemeToggle />
@@ -201,12 +236,13 @@ export default function LandingPage() {
                 >
                   Start Managing Inventory <ArrowRight className="w-5 h-5" />
                 </Link>
-                <Link
-                  href="#features"
+                <button
+                  type="button"
+                  onClick={scrollToFeatures}
                   className="w-full sm:w-auto px-8 py-4 bg-[var(--card-bg)] border border-[var(--border)] text-[var(--text-primary)] font-bold rounded-xl shadow-sm hover:bg-[var(--card-hover)] transition-all flex items-center justify-center gap-2 text-lg"
                 >
                   See implemented features
-                </Link>
+                </button>
               </motion.div>
 
               <motion.p variants={fadeInUp} className="text-sm text-[var(--text-muted)] pt-2">
@@ -441,6 +477,65 @@ export default function LandingPage() {
         </div>
       </section>
 
+      <section id="pricing" className="py-24 px-6 bg-[var(--card-bg)] border-y border-[var(--border)]">
+        <div className="max-w-7xl mx-auto">
+          <div className="max-w-3xl mb-14">
+            <h2 className="text-3xl lg:text-4xl font-bold text-[var(--text-primary)] mb-4">Simple pricing for seller inventory teams</h2>
+            <p className="text-lg text-[var(--text-secondary)]">
+              The free tier is enough to validate the workflow. Pro unlocks the real WhatsApp automation edge.
+              Enterprise adds commercial rollout features for bigger seller operations.
+            </p>
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-3">
+            {pricingPlans.map((plan) => (
+              <div
+                key={plan.id}
+                className={`rounded-3xl border p-6 shadow-xl ${
+                  plan.id === "pro"
+                    ? "border-emerald-500/30 bg-emerald-500/5"
+                    : "border-[var(--border)] bg-[var(--bg-primary)]"
+                }`}
+              >
+                <div className="mb-5 flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className="text-2xl font-bold text-[var(--text-primary)]">{plan.name}</h3>
+                    <p className="mt-2 text-sm text-[var(--text-secondary)]">{plan.summary}</p>
+                  </div>
+                  {plan.id === "pro" && (
+                    <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-500">
+                      Popular
+                    </span>
+                  )}
+                </div>
+                <p className="mb-5 text-4xl font-extrabold text-[var(--text-primary)]">
+                  {plan.price}
+                  <span className="ml-1 text-base font-medium text-[var(--text-muted)]">{plan.cadence}</span>
+                </p>
+                <ul className="space-y-3 text-sm text-[var(--text-secondary)]">
+                  {plan.points.map((point) => (
+                    <li key={point} className="flex items-start gap-2">
+                      <span className="mt-1 h-2 w-2 rounded-full bg-emerald-500" />
+                      <span>{point}</span>
+                    </li>
+                  ))}
+                </ul>
+                <Link
+                  href="/signup"
+                  className={`mt-6 inline-flex w-full items-center justify-center rounded-xl px-4 py-3 text-sm font-semibold transition-all ${
+                    plan.id === "pro"
+                      ? "bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-400 hover:to-teal-500"
+                      : "border border-[var(--border)] bg-[var(--card-bg)] text-[var(--text-primary)] hover:bg-[var(--card-hover)]"
+                  }`}
+                >
+                  Start with {plan.name}
+                </Link>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <section className="py-28 px-6 relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-emerald-500/5 to-transparent pointer-events-none" />
         <div className="max-w-4xl mx-auto text-center relative z-10">
@@ -462,18 +557,22 @@ export default function LandingPage() {
 
       <footer className="py-12 border-t border-[var(--border)] bg-[var(--bg-primary)]">
         <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
-          <div className="flex items-center gap-2">
+          <Link
+            href="/"
+            aria-label="Go to Super Seller home"
+            className="flex items-center gap-2 rounded-lg transition-opacity hover:opacity-85"
+          >
             <Store className="w-5 h-5 text-emerald-500" />
             <span className="font-bold text-[var(--text-primary)]">Super Seller</span>
-          </div>
+          </Link>
           <p className="text-[var(--text-secondary)] text-sm text-center">
             © {new Date().getFullYear()} ONDC Super Seller. WhatsApp-first inventory management for sellers.
           </p>
           <div className="flex gap-4">
-            <Link href="#" className="text-sm text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">
+            <Link href="/privacy" className="text-sm text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">
               Privacy
             </Link>
-            <Link href="#" className="text-sm text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">
+            <Link href="/terms" className="text-sm text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">
               Terms
             </Link>
           </div>

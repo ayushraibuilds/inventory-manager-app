@@ -8,7 +8,6 @@ import {
     Mic,
     Image as ImageIcon,
     Clock,
-    User,
     RefreshCcw,
     Search,
 } from "lucide-react";

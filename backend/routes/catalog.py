@@ -15,6 +15,7 @@ from slowapi.util import get_remote_address
 from schemas import PaginatedCatalogResponse, PriceCheckResponse
 
 from routes.auth import get_jwt_token, verify_api_key, require_authenticated_request
+from billing import BillingError, assert_product_limit_or_raise
 from db import (
     get_all_catalogs,
     get_catalog,
@@ -435,6 +436,16 @@ async def create_item(
     except (KeyError, IndexError, TypeError):
         items = []
 
+    try:
+        assert_product_limit_or_raise(
+            item.seller_id,
+            len(items) + 1,
+            jwt_token=token,
+            source="dashboard_add_item",
+        )
+    except BillingError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
     new_item = {
         "id": str(uuid.uuid4()),
         "category_id": item.category_id,
@@ -637,11 +648,23 @@ async def import_catalog(
         pass
 
     imported_count = 0
+    proposed_total = len(existing_items)
     for item in data.items:
         clean_name = re.sub(r"<[^>]+>", "", item.name)
         clean_name = re.sub(r"[^\w\s\-]", "", clean_name).strip()
         if not clean_name:
             continue
+
+        proposed_total += 1
+        try:
+            assert_product_limit_or_raise(
+                clean_seller_id,
+                proposed_total,
+                jwt_token=token,
+                source="dashboard_import",
+            )
+        except BillingError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
 
         short_desc = f"{item.quantity} {item.unit} of {clean_name}"
         new_item = {
@@ -713,6 +736,7 @@ async def import_csv(
 
     imported_count = 0
     errors: List[str] = []
+    proposed_total = len(existing_items)
     for row_num, row in enumerate(reader, start=2):
         name = (
             row.get("name") or row.get("Name") or row.get("product_name") or ""
@@ -744,6 +768,17 @@ async def import_csv(
         except ValueError:
             errors.append(f"Row {row_num}: invalid price/quantity")
             continue
+
+        proposed_total += 1
+        try:
+            assert_product_limit_or_raise(
+                clean_seller_id,
+                proposed_total,
+                jwt_token=token,
+                source="csv_import",
+            )
+        except BillingError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message)
 
         short_desc = f"{qty_val} {unit} of {clean_name}"
         new_item = {

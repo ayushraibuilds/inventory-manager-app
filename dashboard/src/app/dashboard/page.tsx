@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import { Toaster, toast } from "sonner";
-import { LogOut, BarChart3, User, ShoppingCart, Upload, DollarSign, Download, Wifi, WifiOff, FileText } from "lucide-react";
+import { LogOut, BarChart3, User, ShoppingCart, Upload, DollarSign, Download, Wifi, WifiOff, FileText, Wallet } from "lucide-react";
 import Link from "next/link";
 import StatCards from "../../components/StatCards";
 import InventoryTable, { CatalogItem } from "../../components/InventoryTable";
@@ -296,6 +296,14 @@ export default function Dashboard() {
           >
             <DollarSign className="w-3.5 h-3.5" />
             Pricing
+          </Link>
+
+          <Link
+            href="/billing"
+            className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-4 py-1.5 rounded-full font-semibold text-sm hover:bg-emerald-500/20 transition-all"
+          >
+            <Wallet className="w-3.5 h-3.5" />
+            Billing
           </Link>
 
           {/* Orders Link */}

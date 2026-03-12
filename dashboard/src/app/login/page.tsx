@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, User, Lock, Mail, ArrowRight } from "lucide-react";
+import { ArrowLeft, Lock, Mail, ArrowRight } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import Link from "next/link";
 import { useAuth } from "@/components/AuthProvider";

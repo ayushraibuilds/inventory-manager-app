@@ -88,6 +88,16 @@ class SellerProfile(BaseModel):
     upi_id: Optional[str] = None
     low_stock_alerts: bool = True
     created_at: Optional[str] = None
+    billing_plan: Optional[str] = "free"
+    billing_status: Optional[str] = "active"
+    billing_interval: Optional[str] = "month"
+    billing_provider: Optional[str] = None
+    billing_email: Optional[str] = None
+    razorpay_customer_id: Optional[str] = None
+    razorpay_subscription_id: Optional[str] = None
+    plan_started_at: Optional[str] = None
+    current_period_start: Optional[str] = None
+    current_period_end: Optional[str] = None
     
     model_config = ConfigDict(extra="allow")
 

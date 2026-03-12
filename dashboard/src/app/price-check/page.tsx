@@ -8,7 +8,6 @@ import {
     TrendingDown,
     CheckCircle,
     AlertTriangle,
-    DollarSign,
     RefreshCcw,
     BarChart3,
     Zap,

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException, BackgroundTasks
 from routes.auth import get_jwt_token, verify_twilio_signature, send_whatsapp_reply
 from routes.seller_ratelimit import is_rate_limited
 from agent import process_whatsapp_message
+from billing import BillingError, assert_media_feature_or_raise, assert_message_limit_or_raise, assert_product_limit_or_raise
 from lang_detect import detect as detect_language
 from reply_templates import format_reply
 from price_reference import get_price_suggestion
@@ -73,6 +74,24 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     detected_lang = lang_result.lang_code
     logger.info(f"Language detected: {detected_lang} (method={lang_result.method})")
 
+    # --- Phone to UUID Resolution ---
+    extracted_phone = seller_id.replace("whatsapp:", "")
+
+    real_seller_id = await asyncio.to_thread(get_seller_id_by_phone, extracted_phone)
+    if not real_seller_id:
+        logger.warning(f"Unknown phone number: {extracted_phone}")
+        reply = format_reply(detected_lang, "UNREGISTERED")
+        await asyncio.to_thread(send_whatsapp_reply, seller_id, reply)  # type: ignore
+        return {"status": "error", "message": "Unregistered Seller Phone"}
+
+    seller_id = real_seller_id
+
+    try:
+        await asyncio.to_thread(assert_message_limit_or_raise, seller_id, None, None, "whatsapp")
+    except BillingError as e:
+        await asyncio.to_thread(send_whatsapp_reply, f"whatsapp:{extracted_phone}", e.message)
+        return {"status": "plan_limit", "message": e.message}
+
     # --- Voice Note / Image Interception ---
     image_media_url = None
     try:
@@ -80,6 +99,7 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
         if num_media > 0:
             content_type = form_dict.get("MediaContentType0", "")
             if content_type.startswith("audio/"):
+                await asyncio.to_thread(assert_media_feature_or_raise, seller_id, "audio", None)
                 media_url = form_dict.get("MediaUrl0")
                 if media_url:
                     from voice_processor import voice_processor
@@ -92,27 +112,19 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
                         lang_result = detect_language(raw_message)
                         detected_lang = lang_result.lang_code
             elif content_type.startswith("image/"):
+                await asyncio.to_thread(assert_media_feature_or_raise, seller_id, "image", None)
                 image_media_url = form_dict.get("MediaUrl0")
                 logger.info(f"📷 Image received: {content_type}")
+    except BillingError as e:
+        await asyncio.to_thread(send_whatsapp_reply, f"whatsapp:{extracted_phone}", e.message)
+        return {"status": "plan_feature_blocked", "message": e.message}
     except Exception as e:
         logger.error(f"Media Processing Error: {e}")
         reply = format_reply(detected_lang, "VOICE_ERROR")
         await asyncio.to_thread(
-            send_whatsapp_reply, seller_id, reply,
+            send_whatsapp_reply, f"whatsapp:{extracted_phone}", reply,
         )  # type: ignore
         return {"status": "error", "message": "Media Processing Error"}
-
-    # --- Phone to UUID Resolution ---
-    extracted_phone = seller_id.replace("whatsapp:", "")
-
-    real_seller_id = await asyncio.to_thread(get_seller_id_by_phone, extracted_phone)
-    if not real_seller_id:
-        logger.warning(f"Unknown phone number: {extracted_phone}")
-        reply = format_reply(detected_lang, "UNREGISTERED")
-        await asyncio.to_thread(send_whatsapp_reply, seller_id, reply)  # type: ignore
-        return {"status": "error", "message": "Unregistered Seller Phone"}
-
-    seller_id = real_seller_id
 
     # --- Per-Seller Rate Limit ---
     is_limited = await asyncio.to_thread(is_rate_limited, seller_id)
@@ -210,6 +222,14 @@ async def process_webhook_background(
                     }
                     existing_items.append(beckn_item)
 
+                await asyncio.to_thread(
+                    assert_product_limit_or_raise,
+                    seller_id,
+                    len(existing_items),
+                    None,
+                    "image_catalog",
+                )
+
                 updated_catalog = {
                     "bpp/catalog": {"bpp/providers": [{"id": f"provider_{seller_id}", "descriptor": {"name": f"Super Seller: {seller_id}"}, "items": existing_items}]}
                 }
@@ -236,6 +256,11 @@ async def process_webhook_background(
         result = await asyncio.to_thread(
             process_whatsapp_message, raw_message, seller_id, conversation_history or []
         )  # type: ignore
+    except BillingError as e:
+        logger.warning(f"Billing guard blocked WhatsApp action: {e.code} {e.message}")
+        reply = e.message
+        send_whatsapp_reply(f"whatsapp:{extracted_phone}", reply)
+        return
     except Exception as e:
         logger.error(f"Agent Processing Error: {e}")
         reply = format_reply(detected_lang, "ERROR")

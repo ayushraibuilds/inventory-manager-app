@@ -267,7 +267,13 @@ def ensure_profile_exists(seller_id: str, jwt_token: str = None, service_role: b
     try:
         existing = sb.table("profiles").select("id").eq("id", seller_id).execute()
         if not existing.data:
-            sb.table("profiles").insert({"id": seller_id, "user_id": seller_id}).execute()
+            sb.table("profiles").insert({
+                "id": seller_id,
+                "user_id": seller_id,
+                "billing_plan": "free",
+                "billing_status": "active",
+                "billing_interval": "month",
+            }).execute()
     except Exception as e:
         logger.error(f"ensure_profile_exists error: {e}")
 
@@ -293,7 +299,13 @@ def save_seller_profile(seller_id: str, profile: dict, jwt_token: str = None):
     sb = get_supabase_client(jwt_token)
     try:
         existing = sb.table("profiles").select("*").eq("id", seller_id).execute()
-        current_data = existing.data[0] if existing.data else {"id": seller_id, "user_id": seller_id}
+        current_data = existing.data[0] if existing.data else {
+            "id": seller_id,
+            "user_id": seller_id,
+            "billing_plan": "free",
+            "billing_status": "active",
+            "billing_interval": "month",
+        }
         
         for key, value in profile.items():
             current_data[key] = value
@@ -319,7 +331,17 @@ def get_seller_profile(seller_id: str, jwt_token: str = None) -> dict:
         "gst_number": "",
         "logo_url": "",
         "phone": "",
-        "low_stock_alerts": False
+        "low_stock_alerts": False,
+        "billing_plan": "free",
+        "billing_status": "active",
+        "billing_interval": "month",
+        "billing_provider": "",
+        "billing_email": "",
+        "razorpay_customer_id": "",
+        "razorpay_subscription_id": "",
+        "plan_started_at": None,
+        "current_period_start": None,
+        "current_period_end": None,
     }
 
 # --- Orders ---

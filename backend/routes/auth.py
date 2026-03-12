@@ -99,8 +99,8 @@ def verify_twilio_signature(request: Request, form_data: dict) -> bool:
             )
         return is_valid
     except ImportError:
-        logging.warning("twilio package not installed, skipping webhook validation")
-        return True
+        logging.error("twilio package not installed; refusing webhook validation")
+        return False if is_production else True
 
 
 def send_whatsapp_reply(to: str, body: str):

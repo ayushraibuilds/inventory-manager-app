@@ -74,6 +74,8 @@ def _validate_production_env():
         errors.append("TWILIO_AUTH_TOKEN is not configured")
     if not os.getenv("TWILIO_WHATSAPP_FROM") or "your-" in os.getenv("TWILIO_WHATSAPP_FROM", ""):
         errors.append("TWILIO_WHATSAPP_FROM is not configured")
+    if not os.getenv("PUBLIC_URL") or "your-" in os.getenv("PUBLIC_URL", ""):
+        errors.append("PUBLIC_URL is not configured")
 
     # Security
     jwt_secret = os.getenv("JWT_SECRET", "")
@@ -129,6 +131,7 @@ from routes.orders import router as orders_router, v1_router as orders_v1_router
 from routes.sellers import router as sellers_router, v1_router as sellers_v1_router
 from routes.ondc import router as ondc_router
 from routes.images import router as images_router
+from routes.billing import router as billing_router, v1_router as billing_v1_router
 
 # Backward-compatible /api/* paths
 app.include_router(webhook_router)
@@ -136,11 +139,13 @@ app.include_router(catalog_router)
 app.include_router(orders_router)
 app.include_router(sellers_router)
 app.include_router(images_router)
+app.include_router(billing_router)
 
 # Versioned /api/v1/* paths (same handlers, new prefix)
 app.include_router(catalog_v1_router)
 app.include_router(orders_v1_router)
 app.include_router(sellers_v1_router)
+app.include_router(billing_v1_router)
 
 # ONDC sandbox endpoints
 app.include_router(ondc_router)

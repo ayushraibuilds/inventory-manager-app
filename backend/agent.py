@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from langchain_groq import ChatGroq
 from db import get_catalog, save_catalog
+from billing import assert_product_limit_or_raise
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 load_dotenv()
@@ -387,7 +388,13 @@ def generate_beckn_catalog(state: AgentState) -> Dict[str, Any]:
             ]
         }
     }
-    
+
+    assert_product_limit_or_raise(
+        seller_id,
+        len(existing_items),
+        source="whatsapp_add",
+    )
+
     # 3. Save the updated master catalog back to the database
     saved = save_catalog(seller_id, updated_catalog, service_role=True)
     if not saved:
