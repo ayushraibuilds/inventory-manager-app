@@ -64,8 +64,16 @@ def _validate_production_env():
         errors.append("SUPABASE_URL is not configured")
     if not os.getenv("SUPABASE_ANON_KEY") or "your-" in os.getenv("SUPABASE_ANON_KEY", ""):
         errors.append("SUPABASE_ANON_KEY is not configured")
+    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "your-" in os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""):
+        errors.append("SUPABASE_SERVICE_ROLE_KEY is not configured")
     if not os.getenv("GROQ_API_KEY") or "your-" in os.getenv("GROQ_API_KEY", ""):
         errors.append("GROQ_API_KEY is not configured")
+    if not os.getenv("TWILIO_ACCOUNT_SID") or "your-" in os.getenv("TWILIO_ACCOUNT_SID", ""):
+        errors.append("TWILIO_ACCOUNT_SID is not configured")
+    if not os.getenv("TWILIO_AUTH_TOKEN") or "your-" in os.getenv("TWILIO_AUTH_TOKEN", ""):
+        errors.append("TWILIO_AUTH_TOKEN is not configured")
+    if not os.getenv("TWILIO_WHATSAPP_FROM") or "your-" in os.getenv("TWILIO_WHATSAPP_FROM", ""):
+        errors.append("TWILIO_WHATSAPP_FROM is not configured")
 
     # Security
     jwt_secret = os.getenv("JWT_SECRET", "")

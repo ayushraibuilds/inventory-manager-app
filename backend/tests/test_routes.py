@@ -251,3 +251,36 @@ class TestAuthHelpers:
             from_="whatsapp:+15551234567",
             to="whatsapp:+15557654321",
         )
+
+    def test_verify_twilio_signature_uses_public_url_override(self):
+        from routes.auth import verify_twilio_signature
+
+        request = MagicMock()
+        request.headers.get.side_effect = lambda key, default="": {
+            "x-twilio-signature": "sig-123",
+            "host": "internal.railway.local",
+            "x-forwarded-host": "public.up.railway.app",
+            "x-forwarded-proto": "https",
+        }.get(key, default)
+        request.url.path = "/whatsapp-webhook"
+        request.url.query = "foo=bar"
+
+        with patch(
+            "routes.auth.get_env_value",
+            side_effect=lambda key, default="": {
+                "PUBLIC_URL": "https://catalog.example.com",
+                "TWILIO_AUTH_TOKEN": "auth-token",
+            }.get(key, default),
+        ), patch("twilio.request_validator.RequestValidator") as mock_validator_cls:
+            mock_validator = MagicMock()
+            mock_validator.validate.return_value = True
+            mock_validator_cls.return_value = mock_validator
+
+            ok = verify_twilio_signature(request, {"Body": "hello"})
+
+        assert ok is True
+        mock_validator.validate.assert_called_once_with(
+            "https://catalog.example.com/whatsapp-webhook?foo=bar",
+            {"Body": "hello"},
+            "sig-123",
+        )

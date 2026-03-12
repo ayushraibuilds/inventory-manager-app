@@ -52,15 +52,22 @@ async def require_authenticated_request(
 
 
 def verify_twilio_signature(request: Request, form_data: dict) -> bool:
+    public_base_url = get_env_value("PUBLIC_URL") or get_env_value("APP_BASE_URL")
+
     # Reconstruct the public URL (vital for ngrok/proxies)
     forwarded_proto = request.headers.get("x-forwarded-proto")
     forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
-    
-    if forwarded_proto and forwarded_host:
+    query_string = request.url.query
+
+    if public_base_url:
+        url = f"{public_base_url.rstrip('/')}{request.url.path}"
+    elif forwarded_proto and forwarded_host:
         base_url = f"{forwarded_proto}://{forwarded_host}"
         url = f"{base_url}{request.url.path}"
     else:
         url = str(request.url)
+    if query_string and "?" not in url:
+        url = f"{url}?{query_string}"
 
     signature = request.headers.get("x-twilio-signature", "")
     
@@ -84,7 +91,12 @@ def verify_twilio_signature(request: Request, form_data: dict) -> bool:
         validator = RequestValidator(auth_token)
         is_valid = validator.validate(url, form_data, signature)
         if not is_valid:
-            logging.error(f"Twilio signature validation failed. URL used for validation: {url}")
+            logging.error(
+                "Twilio signature validation failed. "
+                f"URL={url} host={request.headers.get('host', '')} "
+                f"x-forwarded-host={request.headers.get('x-forwarded-host', '')} "
+                f"x-forwarded-proto={request.headers.get('x-forwarded-proto', '')}"
+            )
         return is_valid
     except ImportError:
         logging.warning("twilio package not installed, skipping webhook validation")

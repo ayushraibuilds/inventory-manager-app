@@ -33,6 +33,7 @@
 #    SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
 #    GROQ_API_KEY, JWT_SECRET
 #    TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM
+#    PUBLIC_URL=https://your-backend.up.railway.app
 #    REDIS_URL=${{Redis.REDIS_URL}}
 #    CORS_ORIGINS=https://your-dashboard.up.railway.app
 
