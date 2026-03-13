@@ -1,11 +1,27 @@
 import os
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from supabase import create_client, Client, ClientOptions
 from env_utils import get_merged_env
 
 logger = logging.getLogger(__name__)
+
+
+def _default_trial_fields() -> dict:
+    now = datetime.utcnow()
+    trial_end = now + timedelta(days=7)
+    return {
+        "billing_plan": "pro",
+        "billing_status": "trialing",
+        "billing_interval": "trial",
+        "billing_provider": "trial",
+        "plan_started_at": now.isoformat(),
+        "current_period_start": now.isoformat(),
+        "current_period_end": trial_end.isoformat(),
+        "trial_started_at": now.isoformat(),
+        "trial_ends_at": trial_end.isoformat(),
+    }
 
 def _get_env():
     return get_merged_env()
@@ -270,9 +286,7 @@ def ensure_profile_exists(seller_id: str, jwt_token: str = None, service_role: b
             sb.table("profiles").insert({
                 "id": seller_id,
                 "user_id": seller_id,
-                "billing_plan": "free",
-                "billing_status": "active",
-                "billing_interval": "month",
+                **_default_trial_fields(),
             }).execute()
     except Exception as e:
         logger.error(f"ensure_profile_exists error: {e}")
@@ -302,9 +316,7 @@ def save_seller_profile(seller_id: str, profile: dict, jwt_token: str = None):
         current_data = existing.data[0] if existing.data else {
             "id": seller_id,
             "user_id": seller_id,
-            "billing_plan": "free",
-            "billing_status": "active",
-            "billing_interval": "month",
+            **_default_trial_fields(),
         }
         
         for key, value in profile.items():
@@ -333,15 +345,17 @@ def get_seller_profile(seller_id: str, jwt_token: str = None) -> dict:
         "phone": "",
         "low_stock_alerts": False,
         "billing_plan": "free",
-        "billing_status": "active",
-        "billing_interval": "month",
-        "billing_provider": "",
+        "billing_status": "trialing",
+        "billing_interval": "trial",
+        "billing_provider": "trial",
         "billing_email": "",
         "razorpay_customer_id": "",
         "razorpay_subscription_id": "",
-        "plan_started_at": None,
-        "current_period_start": None,
-        "current_period_end": None,
+        "plan_started_at": _default_trial_fields()["plan_started_at"],
+        "current_period_start": _default_trial_fields()["current_period_start"],
+        "current_period_end": _default_trial_fields()["current_period_end"],
+        "trial_started_at": _default_trial_fields()["trial_started_at"],
+        "trial_ends_at": _default_trial_fields()["trial_ends_at"],
     }
 
 # --- Orders ---

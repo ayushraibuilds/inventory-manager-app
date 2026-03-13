@@ -98,6 +98,8 @@ class SellerProfile(BaseModel):
     plan_started_at: Optional[str] = None
     current_period_start: Optional[str] = None
     current_period_end: Optional[str] = None
+    trial_started_at: Optional[str] = None
+    trial_ends_at: Optional[str] = None
     
     model_config = ConfigDict(extra="allow")
 

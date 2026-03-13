@@ -25,6 +25,10 @@ type Plan = {
 type BillingSummary = {
   seller_id: string;
   current_plan: string;
+  billing_status: string;
+  trial_started_at?: string | null;
+  trial_ends_at?: string | null;
+  trial_days_remaining?: number;
   plans: Plan[];
   usage: {
     period_start: string;
@@ -188,9 +192,16 @@ export default function BillingPage() {
           <p className="mt-2 text-[var(--text-secondary)]">
             Track usage, compare plans, and upgrade when your seller workflow outgrows the free tier.
           </p>
+          {summary.billing_status === "trialing" && (
+            <p className="mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-sm font-medium text-emerald-400">
+              <SparklineDot />
+              7-day Pro trial active{typeof summary.trial_days_remaining === "number" ? ` • ${summary.trial_days_remaining} day(s) left` : ""}
+            </p>
+          )}
         </div>
         <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-400">
           Current plan: <span className="font-bold uppercase">{summary.current_plan}</span>
+          {summary.billing_status === "trialing" ? " (trial)" : ""}
         </div>
       </header>
 
@@ -301,11 +312,15 @@ export default function BillingPage() {
           <span className="font-semibold">What monetization is enforcing right now</span>
         </div>
         <p>
-          Free tier is capped at 100 products and 100 WhatsApp messages per month. Voice notes and image
-          recognition unlock on Pro and Enterprise. Billing activity and plan changes are tracked in the
-          backend for seller-level usage management.
+          Every seller starts with a 7-day Pro trial. After that, the Free tier is capped at 100 products
+          and 100 WhatsApp messages per month. Voice notes and image recognition unlock on Pro and Enterprise.
+          Billing state is now stored explicitly on seller profiles and subscription records.
         </p>
       </div>
     </div>
   );
+}
+
+function SparklineDot() {
+  return <span className="inline-block h-2 w-2 rounded-full bg-emerald-400" />;
 }

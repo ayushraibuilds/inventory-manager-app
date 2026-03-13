@@ -125,7 +125,7 @@ const pricingPlans = [
     name: "Free",
     price: "₹0",
     cadence: "/month",
-    summary: "For sellers getting started with WhatsApp-led inventory control.",
+    summary: "Starts after the included 7-day Pro trial ends.",
     points: ["100 products", "100 WhatsApp messages/month", "Basic dashboard"],
   },
   {
@@ -133,8 +133,8 @@ const pricingPlans = [
     name: "Pro",
     price: "₹199",
     cadence: "/month",
-    summary: "For active sellers who need voice notes, image recognition, and unlimited scale.",
-    points: ["Unlimited products", "Voice notes", "Image recognition", "Priority support"],
+    summary: "Includes the full automation workflow and is free for the first 7 days.",
+    points: ["7-day free trial", "Unlimited products", "Voice notes", "Image recognition", "Priority support"],
   },
   {
     id: "enterprise",
@@ -482,7 +482,8 @@ export default function LandingPage() {
           <div className="max-w-3xl mb-14">
             <h2 className="text-3xl lg:text-4xl font-bold text-[var(--text-primary)] mb-4">Simple pricing for seller inventory teams</h2>
             <p className="text-lg text-[var(--text-secondary)]">
-              The free tier is enough to validate the workflow. Pro unlocks the real WhatsApp automation edge.
+              Every seller starts with a 7-day Pro trial. After that, the free tier is enough to validate the workflow,
+              while Pro unlocks the real WhatsApp automation edge.
               Enterprise adds commercial rollout features for bigger seller operations.
             </p>
           </div>

@@ -10,7 +10,9 @@ alter table if exists public.profiles
   add column if not exists razorpay_subscription_id text,
   add column if not exists plan_started_at timestamptz,
   add column if not exists current_period_start timestamptz,
-  add column if not exists current_period_end timestamptz;
+  add column if not exists current_period_end timestamptz,
+  add column if not exists trial_started_at timestamptz,
+  add column if not exists trial_ends_at timestamptz;
 
 create table if not exists public.subscriptions (
   id uuid primary key default gen_random_uuid(),

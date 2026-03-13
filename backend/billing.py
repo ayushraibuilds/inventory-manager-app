@@ -15,6 +15,7 @@ from db import get_catalog, get_supabase_client, log_activity, ensure_profile_ex
 from env_utils import get_env_value
 
 logger = logging.getLogger(__name__)
+TRIAL_DAYS = 7
 
 
 PLANS: dict[str, dict[str, Any]] = {
@@ -115,16 +116,18 @@ def get_plan_definition(plan: str | None) -> dict[str, Any]:
 
 def _default_billing_profile() -> dict[str, Any]:
     return {
-        "billing_plan": "free",
-        "billing_status": "active",
-        "billing_interval": "month",
-        "billing_provider": "",
+        "billing_plan": "pro",
+        "billing_status": "trialing",
+        "billing_interval": "trial",
+        "billing_provider": "trial",
         "billing_email": "",
         "razorpay_customer_id": "",
         "razorpay_subscription_id": "",
         "plan_started_at": None,
         "current_period_start": None,
         "current_period_end": None,
+        "trial_started_at": None,
+        "trial_ends_at": None,
     }
 
 
@@ -136,14 +139,16 @@ def _get_billing_profile(seller_id: str, jwt_token: str | None = None) -> dict[s
             sb.table("profiles")
             .select(
                 "id,billing_plan,billing_status,billing_interval,billing_provider,billing_email,"
-                "razorpay_customer_id,razorpay_subscription_id,plan_started_at,current_period_start,current_period_end"
+                "razorpay_customer_id,razorpay_subscription_id,plan_started_at,current_period_start,current_period_end,"
+                "trial_started_at,trial_ends_at"
             )
             .eq("id", seller_id)
             .limit(1)
             .execute()
         )
         if response.data:
-            return {**_default_billing_profile(), **response.data[0]}
+            profile = {**_default_billing_profile(), **response.data[0]}
+            return _apply_trial_state(seller_id, profile, jwt_token=jwt_token)
     except Exception as e:
         logger.error(f"_get_billing_profile error: {e}")
     return _default_billing_profile()
@@ -214,6 +219,86 @@ def _insert_subscription_event(
         sb.table("subscriptions").insert(payload).execute()
     except Exception as e:
         logger.error(f"_insert_subscription_event error: {e}")
+
+
+def _apply_trial_state(
+    seller_id: str,
+    profile: dict[str, Any],
+    jwt_token: str | None = None,
+) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    trial_started_raw = profile.get("trial_started_at")
+    trial_ends_raw = profile.get("trial_ends_at")
+    billing_plan = normalize_plan(profile.get("billing_plan"))
+    billing_status = str(profile.get("billing_status") or "active")
+    has_paid_reference = bool(profile.get("razorpay_subscription_id"))
+
+    trial_started = _parse_created_at(trial_started_raw)
+    trial_ends = _parse_created_at(trial_ends_raw)
+
+    should_bootstrap_trial = (
+        not has_paid_reference
+        and billing_status not in {"cancelled"}
+        and trial_started is None
+    )
+
+    if should_bootstrap_trial:
+        trial_started = now
+        trial_ends = now + timedelta(days=TRIAL_DAYS)
+        updates = {
+            "billing_plan": "pro",
+            "billing_status": "trialing",
+            "billing_interval": "trial",
+            "billing_provider": "trial",
+            "plan_started_at": trial_started.isoformat(),
+            "current_period_start": trial_started.isoformat(),
+            "current_period_end": trial_ends.isoformat(),
+            "trial_started_at": trial_started.isoformat(),
+            "trial_ends_at": trial_ends.isoformat(),
+            "updated_at": now.isoformat(),
+        }
+        _update_profile_billing(seller_id, updates, jwt_token=jwt_token)
+        _insert_subscription_event(
+            seller_id=seller_id,
+            plan="pro",
+            status="trialing",
+            provider="trial",
+            amount_inr=0,
+            jwt_token=jwt_token,
+            metadata={"source": "auto_trial"},
+            current_period_start=trial_started.isoformat(),
+            current_period_end=trial_ends.isoformat(),
+        )
+        return {**profile, **updates}
+
+    if billing_status == "trialing" and trial_ends is not None and trial_ends <= now:
+        updates = {
+            "billing_plan": "free",
+            "billing_status": "active",
+            "billing_interval": "month",
+            "billing_provider": "trial_expired",
+            "current_period_start": now.isoformat(),
+            "current_period_end": None,
+            "updated_at": now.isoformat(),
+        }
+        _update_profile_billing(seller_id, updates, jwt_token=jwt_token)
+        _insert_subscription_event(
+            seller_id=seller_id,
+            plan="free",
+            status="active",
+            provider="trial_expired",
+            amount_inr=0,
+            jwt_token=jwt_token,
+            metadata={"source": "trial_expired"},
+            current_period_start=now.isoformat(),
+            current_period_end=None,
+        )
+        return {**profile, **updates}
+
+    if billing_plan == "free" and billing_status == "trialing":
+        profile["billing_plan"] = "pro"
+
+    return profile
 
 
 def get_current_plan(seller_id: str, jwt_token: str | None = None) -> str:
@@ -309,6 +394,8 @@ def get_billing_summary(seller_id: str, jwt_token: str | None = None) -> dict[st
         "current_period_end": profile.get("current_period_end"),
         "razorpay_customer_id": profile.get("razorpay_customer_id") or "",
         "razorpay_subscription_id": profile.get("razorpay_subscription_id") or "",
+        "trial_started_at": profile.get("trial_started_at"),
+        "trial_ends_at": profile.get("trial_ends_at"),
         "current_plan_details": plan_def,
         "usage": {
             "period_start": usage.period_start,
@@ -323,6 +410,11 @@ def get_billing_summary(seller_id: str, jwt_token: str | None = None) -> dict[st
                 "remaining": _remaining(usage.messages_limit, usage.messages_used),
             },
         },
+        "trial_days_remaining": (
+            max((_parse_created_at(profile.get("trial_ends_at")) - datetime.now(timezone.utc)).days + 1, 0)
+            if usage.billing_status == "trialing" and _parse_created_at(profile.get("trial_ends_at")) is not None
+            else 0
+        ),
         "latest_subscription": latest_subscription,
         "plans": list(PLANS.values()),
     }
