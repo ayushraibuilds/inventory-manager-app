@@ -1,14 +1,30 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'config/app_config.dart';
 import 'screens/ai_chat_screen.dart';
 import 'screens/dashboard_screen.dart';
+import 'screens/products_screen.dart';
 import 'screens/scanner_screen.dart';
+import 'screens/sign_in_screen.dart';
+import 'services/session_service.dart';
 
 const Color _primaryBlue = Color(0xFF2563EB);
 const Color _slateBackground = Color(0xFF0F172A);
 const Color _slateSurface = Color(0xFF162033);
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  if (AppConfig.hasSupabaseConfig) {
+    await Supabase.initialize(
+      url: AppConfig.supabaseUrl,
+      anonKey: AppConfig.supabaseAnonKey,
+    );
+  }
+
+  await SessionService().restoreSession();
   runApp(const SellerApp());
 }
 
@@ -83,7 +99,34 @@ class SellerApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'ONDC Super Seller',
       theme: baseTheme,
-      home: MainWrapper(dashboardLoader: dashboardLoader),
+      home: AnimatedBuilder(
+        animation: SessionService(),
+        builder: (context, _) {
+          switch (SessionService().status) {
+            case SessionStatus.loading:
+              return const _BootScreen();
+            case SessionStatus.unauthenticated:
+              return const SignInScreen();
+            case SessionStatus.authenticated:
+              return MainWrapper(dashboardLoader: dashboardLoader);
+          }
+        },
+      ),
+      builder: kDebugMode
+          ? (context, child) {
+              return Banner(
+                message:
+                    AppConfig.apiBaseUrl.contains('your-production-url.com')
+                    ? 'Configure API'
+                    : 'API Ready',
+                location: BannerLocation.topEnd,
+                color: AppConfig.apiBaseUrl.contains('your-production-url.com')
+                    ? const Color(0xFFF97316)
+                    : const Color(0xFF16A34A),
+                child: child ?? const SizedBox.shrink(),
+              );
+            }
+          : null,
     );
   }
 }
@@ -99,17 +142,38 @@ class MainWrapper extends StatefulWidget {
 
 class _MainWrapperState extends State<MainWrapper> {
   int _currentIndex = 0;
+  final Set<int> _visitedTabs = {0};
 
-  late final List<Widget> _screens = <Widget>[
-    DashboardScreen(loader: widget.dashboardLoader),
-    const ScannerScreen(),
-    const AiChatScreen(),
+  late final List<WidgetBuilder> _screenBuilders = <WidgetBuilder>[
+    (_) => DashboardScreen(loader: widget.dashboardLoader),
+    (_) => const ProductsScreen(),
+    (_) => const ScannerScreen(),
+    (_) => const AiChatScreen(),
   ];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(index: _currentIndex, children: _screens),
+      body: Stack(
+        children: [
+          IndexedStack(
+            index: _currentIndex,
+            children: List.generate(_screenBuilders.length, (index) {
+              if (!_visitedTabs.contains(index)) {
+                return const SizedBox.shrink();
+              }
+              return _screenBuilders[index](context);
+            }),
+          ),
+          Positioned(
+            top: 18,
+            right: 20,
+            child: SafeArea(
+              child: _SessionMenuButton(currentIndex: _currentIndex),
+            ),
+          ),
+        ],
+      ),
       bottomNavigationBar: DecoratedBox(
         decoration: const BoxDecoration(
           color: Color(0xFF111827),
@@ -117,7 +181,10 @@ class _MainWrapperState extends State<MainWrapper> {
         ),
         child: BottomNavigationBar(
           currentIndex: _currentIndex,
-          onTap: (index) => setState(() => _currentIndex = index),
+          onTap: (index) => setState(() {
+            _currentIndex = index;
+            _visitedTabs.add(index);
+          }),
           backgroundColor: Colors.transparent,
           elevation: 0,
           selectedItemColor: _primaryBlue,
@@ -129,14 +196,92 @@ class _MainWrapperState extends State<MainWrapper> {
               label: 'Pulse',
             ),
             BottomNavigationBarItem(
+              icon: Icon(Icons.inventory_2_rounded),
+              label: 'Products',
+            ),
+            BottomNavigationBarItem(
               icon: Icon(Icons.qr_code_scanner_rounded),
               label: 'Scanner',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.auto_awesome_rounded),
-              label: 'AI Center',
+              label: 'AI Chat',
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BootScreen extends StatelessWidget {
+  const _BootScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Center(child: CircularProgressIndicator(color: Color(0xFF2563EB))),
+    );
+  }
+}
+
+class _SessionMenuButton extends StatelessWidget {
+  const _SessionMenuButton({required this.currentIndex});
+
+  final int currentIndex;
+
+  @override
+  Widget build(BuildContext context) {
+    final sessionService = SessionService();
+    return Material(
+      color: const Color(0xCC111827),
+      borderRadius: BorderRadius.circular(18),
+      child: PopupMenuButton<String>(
+        tooltip: 'Session',
+        color: const Color(0xFF111827),
+        onSelected: (value) async {
+          if (value == 'sign_out') {
+            await sessionService.signOut();
+          }
+        },
+        itemBuilder: (context) {
+          return [
+            PopupMenuItem<String>(
+              enabled: false,
+              value: 'mode',
+              child: Text(
+                sessionService.authMode == SessionAuthMode.jwt
+                    ? 'JWT session'
+                    : sessionService.authMode == SessionAuthMode.supabase
+                        ? 'Supabase session'
+                        : 'API key session',
+              ),
+            ),
+            if ((sessionService.sellerId ?? '').isNotEmpty)
+              PopupMenuItem<String>(
+                enabled: false,
+                value: 'seller',
+                child: Text('Seller: ${sessionService.sellerId}'),
+              ),
+            const PopupMenuDivider(),
+            const PopupMenuItem<String>(
+              value: 'sign_out',
+              child: Text('Sign out'),
+            ),
+          ];
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: const Color(0xFF1E293B)),
+          ),
+          child: Icon(
+            currentIndex == 2
+                ? Icons.more_horiz_rounded
+                : Icons.account_circle_outlined,
+            color: Colors.white,
+          ),
         ),
       ),
     );

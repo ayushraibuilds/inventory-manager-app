@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/dashboard_stats.dart';
 import '../services/api_service.dart';
 
 typedef DashboardLoader = Future<Map<String, dynamic>> Function();
@@ -14,7 +15,7 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  late Future<Map<String, dynamic>> _statsFuture;
+  late Future<DashboardStats> _statsFuture;
 
   @override
   void initState() {
@@ -22,21 +23,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _statsFuture = _loadStats();
   }
 
-  Future<Map<String, dynamic>> _loadStats() {
-    return widget.loader?.call() ?? ApiService().getDashboardStats();
+  Future<DashboardStats> _loadStats() async {
+    final payload =
+        await (widget.loader?.call() ?? ApiService().getDashboardStats());
+    return DashboardStats.fromApi(payload);
   }
 
   Future<void> _refresh() async {
     setState(() {
       _statsFuture = _loadStats();
     });
-
     await _statsFuture;
   }
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Map<String, dynamic>>(
+    return FutureBuilder<DashboardStats>(
       future: _statsFuture,
       builder: (context, snapshot) {
         Widget content;
@@ -45,12 +47,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
           content = const _DashboardLoading();
         } else if (snapshot.hasError) {
           content = _DashboardError(
-            message: '${snapshot.error}',
+            message: _buildErrorMessage(snapshot.error),
             onRetry: _refresh,
           );
         } else {
-          final payload = _normalizePayload(snapshot.data ?? const {});
-          content = _DashboardBody(payload: payload);
+          content = _DashboardBody(stats: snapshot.data!);
         }
 
         return RefreshIndicator(
@@ -66,42 +67,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Map<String, dynamic> _normalizePayload(Map<String, dynamic> source) {
-    final nested = source['stats'];
-    if (nested is Map) {
-      return Map<String, dynamic>.from(nested);
+  String _buildErrorMessage(Object? error) {
+    if (error is FormatException) {
+      return 'Dashboard data is incomplete. Check your API connection.';
     }
-
-    return source;
+    return '$error';
   }
 }
 
 class _DashboardBody extends StatelessWidget {
-  const _DashboardBody({required this.payload});
+  const _DashboardBody({required this.stats});
 
-  final Map<String, dynamic> payload;
+  final DashboardStats stats;
 
   @override
   Widget build(BuildContext context) {
-    final ordersToday = _readInt(payload, [
-      'todays_orders',
-      'today_orders',
-      'todayOrders',
-      'orders_today',
-    ]);
-    final pendingFulfillment = _readInt(payload, [
-      'pending_fulfillment',
-      'pending_orders',
-      'pendingFulfillment',
-      'pendingOrders',
-    ]);
-    final lowStockAlerts = _readInt(payload, [
-      'low_stock_alerts',
-      'low_stock',
-      'lowStockAlerts',
-      'lowStock',
-    ]);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -135,7 +115,7 @@ class _DashboardBody extends StatelessWidget {
               ),
               SizedBox(height: 12),
               Text(
-                'Your ONDC floor is live and synced.',
+                'Your inventory at a glance.',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 28,
@@ -145,7 +125,7 @@ class _DashboardBody extends StatelessWidget {
               ),
               SizedBox(height: 12),
               Text(
-                'Track orders, fulfillment pressure, and stock risk from one command surface.',
+                'Track catalog size, total value, and stock risk from one screen.',
                 style: TextStyle(
                   color: Colors.white70,
                   fontSize: 15,
@@ -157,52 +137,36 @@ class _DashboardBody extends StatelessWidget {
         ),
         const SizedBox(height: 24),
         const Text(
-          'Today',
+          'Overview',
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 16),
         _MetricCard(
-          title: "Today's Orders",
-          value: ordersToday,
-          icon: Icons.shopping_bag_outlined,
+          title: 'Total Products',
+          value: stats.todaysOrders,
+          icon: Icons.inventory_2_outlined,
           accent: const Color(0xFF38BDF8),
-          subtitle: 'Orders created across your live catalog today.',
+          subtitle: 'Total items in your catalog right now.',
         ),
         const SizedBox(height: 14),
         _MetricCard(
-          title: 'Pending Fulfillment',
-          value: pendingFulfillment,
-          icon: Icons.local_shipping_outlined,
+          title: 'Catalog Value',
+          value: stats.pendingFulfillment,
+          icon: Icons.currency_rupee_rounded,
           accent: const Color(0xFF22C55E),
-          subtitle: 'Orders still waiting to be packed or dispatched.',
+          subtitle: 'Total value of inventory at selling prices.',
+          prefix: '₹',
         ),
         const SizedBox(height: 14),
         _MetricCard(
           title: 'Low Stock Alerts',
-          value: lowStockAlerts,
+          value: stats.lowStockAlerts,
           icon: Icons.warning_amber_rounded,
           accent: const Color(0xFFF97316),
-          subtitle: 'SKUs close to sellout and needing replenishment.',
+          subtitle: 'Products with 5 or fewer units remaining.',
         ),
       ],
     );
-  }
-
-  int _readInt(Map<String, dynamic> data, List<String> keys) {
-    for (final key in keys) {
-      final value = data[key];
-      if (value is int) {
-        return value;
-      }
-      if (value is num) {
-        return value.toInt();
-      }
-      if (value is String) {
-        return int.tryParse(value) ?? 0;
-      }
-    }
-
-    return 0;
   }
 }
 
@@ -213,6 +177,7 @@ class _MetricCard extends StatelessWidget {
     required this.icon,
     required this.accent,
     required this.subtitle,
+    this.prefix = '',
   });
 
   final String title;
@@ -220,6 +185,7 @@ class _MetricCard extends StatelessWidget {
   final IconData icon;
   final Color accent;
   final String subtitle;
+  final String prefix;
 
   @override
   Widget build(BuildContext context) {
@@ -268,10 +234,10 @@ class _MetricCard extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Text(
-            '$value',
+            '$prefix$value',
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 30,
+              fontSize: 28,
               fontWeight: FontWeight.w800,
             ),
           ),

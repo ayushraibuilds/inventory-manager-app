@@ -1,4 +1,4 @@
-package com.example.ondc_seller_app
+package com.ondc.superseller
 
 import io.flutter.embedding.android.FlutterActivity
 
