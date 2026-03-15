@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'config/app_config.dart';
+import 'screens/activity_screen.dart';
 import 'screens/ai_chat_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/products_screen.dart';
@@ -149,6 +150,7 @@ class _MainWrapperState extends State<MainWrapper> {
     (_) => const ProductsScreen(),
     (_) => const ScannerScreen(),
     (_) => const AiChatScreen(),
+    (_) => const ActivityScreen(),
   ];
 
   @override
@@ -206,6 +208,10 @@ class _MainWrapperState extends State<MainWrapper> {
             BottomNavigationBarItem(
               icon: Icon(Icons.auto_awesome_rounded),
               label: 'AI Chat',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.history_rounded),
+              label: 'Activity',
             ),
           ],
         ),

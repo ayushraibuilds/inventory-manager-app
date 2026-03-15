@@ -226,8 +226,32 @@ class _AiChatScreenState extends State<AiChatScreen> {
   }
 }
 
-class _TypingBubble extends StatelessWidget {
+/// Animated typing indicator with staggered dot pulses.
+class _TypingBubble extends StatefulWidget {
   const _TypingBubble();
+
+  @override
+  State<_TypingBubble> createState() => _TypingBubbleState();
+}
+
+class _TypingBubbleState extends State<_TypingBubble>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -240,29 +264,35 @@ class _TypingBubble extends StatelessWidget {
           borderRadius: BorderRadius.circular(22),
           border: Border.all(color: const Color(0xFF1E293B)),
         ),
-        child: const SizedBox(
-          width: 24,
+        child: SizedBox(
+          width: 32,
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [_TypingDot(), _TypingDot(), _TypingDot()],
+            children: List.generate(3, (index) {
+              return AnimatedBuilder(
+                animation: _controller,
+                builder: (context, child) {
+                  final delay = index * 0.2;
+                  final t = (_controller.value - delay) % 1.0;
+                  final opacity = (t < 0.5)
+                      ? 0.3 + 0.7 * (t / 0.5)
+                      : 0.3 + 0.7 * ((1.0 - t) / 0.5);
+                  return Opacity(
+                    opacity: opacity,
+                    child: Container(
+                      width: 6,
+                      height: 6,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF94A3B8),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  );
+                },
+              );
+            }),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _TypingDot extends StatelessWidget {
-  const _TypingDot();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 5,
-      height: 5,
-      decoration: const BoxDecoration(
-        color: Color(0xFF94A3B8),
-        shape: BoxShape.circle,
       ),
     );
   }

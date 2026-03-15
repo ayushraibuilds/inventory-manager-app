@@ -3,7 +3,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:label="ONDC Super Seller"
+        android:label="Super Seller"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

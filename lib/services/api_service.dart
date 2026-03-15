@@ -121,6 +121,30 @@ class ApiService {
     await updateProduct(itemId, {'quantity': currentQty + quantity});
   }
 
+  /// Delete a product via DELETE /api/catalog/item/{id}
+  Future<void> deleteProduct(String itemId) async {
+    await _send(
+      () => _dio.delete('api/catalog/item/$itemId'),
+    );
+  }
+
+  /// Fetch recent activity from GET /api/activity
+  Future<List<Map<String, dynamic>>> getActivity() async {
+    final response = await _send(
+      () => _dio.get('api/activity'),
+    );
+
+    final data = _extractMap(response);
+    final activities = data['activities'] ?? data['items'] ?? data['events'];
+    if (activities is List) {
+      return activities
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList(growable: false);
+    }
+    return [];
+  }
+
   // ──────────────────────────────────────────────
   // Dashboard stats (computed from catalog)
   // ──────────────────────────────────────────────

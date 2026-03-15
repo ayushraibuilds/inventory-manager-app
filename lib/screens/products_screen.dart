@@ -110,7 +110,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                       padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
                       physics: const AlwaysScrollableScrollPhysics(),
                       itemCount: products.length,
-                      separatorBuilder: (_, _a) => const SizedBox(height: 10),
+                      separatorBuilder: (_, index) => const SizedBox(height: 10),
                       itemBuilder: (context, index) {
                         return _ProductCard(
                           product: products[index],
@@ -134,11 +134,15 @@ class _ProductsScreenState extends State<ProductsScreen> {
   }
 
   void _showProductDetail(Map<String, dynamic> product) {
-    final name = product['name'] ?? 'Unknown';
-    final price = product['selling_price'] ?? product['price'] ?? 0;
-    final qty = product['quantity'] ?? 0;
-    final category = product['category'] ?? '-';
-    final unit = product['unit'] ?? '-';
+    final itemId = product['id']?.toString() ?? '';
+    final nameCtrl = TextEditingController(text: product['name'] ?? '');
+    final priceCtrl = TextEditingController(
+      text: '${product['selling_price'] ?? product['price'] ?? 0}',
+    );
+    final qtyCtrl = TextEditingController(text: '${product['quantity'] ?? 0}');
+    final categoryCtrl = TextEditingController(text: product['category'] ?? '');
+    String? errorText;
+    bool isSaving = false;
 
     showModalBottomSheet(
       context: context,
@@ -147,37 +151,164 @@ class _ProductsScreenState extends State<ProductsScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40, height: 4,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF334155),
-                    borderRadius: BorderRadius.circular(999),
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx, setModalState) {
+          return Padding(
+            padding: EdgeInsets.fromLTRB(
+              24, 20, 24, MediaQuery.of(ctx).viewInsets.bottom + 24,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40, height: 4,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF334155),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 20),
-              Text(name,
-                style: const TextStyle(
-                  color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800,
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text('Edit Product',
+                        style: TextStyle(
+                          color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    if (itemId.isNotEmpty)
+                      IconButton(
+                        onPressed: isSaving ? null : () async {
+                          final confirm = await showDialog<bool>(
+                            context: ctx,
+                            builder: (dCtx) => AlertDialog(
+                              backgroundColor: const Color(0xFF111827),
+                              title: const Text('Delete product?',
+                                style: TextStyle(color: Colors.white),
+                              ),
+                              content: Text(
+                                'This will remove "${nameCtrl.text}" from your catalog.',
+                                style: const TextStyle(color: Color(0xFFCBD5E1)),
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(dCtx, false),
+                                  child: const Text('Cancel'),
+                                ),
+                                TextButton(
+                                  onPressed: () => Navigator.pop(dCtx, true),
+                                  child: const Text('Delete',
+                                    style: TextStyle(color: Color(0xFFEF4444)),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (confirm == true) {
+                            try {
+                              await ApiService().deleteProduct(itemId);
+                              if (ctx.mounted) Navigator.pop(ctx);
+                              _refresh();
+                            } catch (e) {
+                              setModalState(() => errorText = '$e');
+                            }
+                          }
+                        },
+                        icon: const Icon(Icons.delete_outline,
+                          color: Color(0xFFEF4444), size: 22,
+                        ),
+                      ),
+                  ],
                 ),
-              ),
-              const SizedBox(height: 16),
-              _DetailRow(label: 'Price', value: '₹$price'),
-              _DetailRow(label: 'Quantity', value: '$qty'),
-              _DetailRow(label: 'Category', value: category),
-              _DetailRow(label: 'Unit', value: unit),
-              const SizedBox(height: 8),
-            ],
-          ),
-        );
+                const SizedBox(height: 16),
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(labelText: 'Product name'),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: priceCtrl,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: 'Price (₹)'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: qtyCtrl,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: 'Quantity'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: categoryCtrl,
+                  decoration: const InputDecoration(labelText: 'Category'),
+                ),
+                if (errorText != null) ...[
+                  const SizedBox(height: 12),
+                  Text(errorText!,
+                    style: const TextStyle(color: Color(0xFFFCA5A5), fontSize: 13),
+                  ),
+                ],
+                const SizedBox(height: 18),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: isSaving ? null : () async {
+                      final name = nameCtrl.text.trim();
+                      final price = double.tryParse(priceCtrl.text.trim());
+                      final qty = int.tryParse(qtyCtrl.text.trim());
+
+                      if (name.isEmpty || price == null || qty == null) {
+                        setModalState(() => errorText = 'All fields are required.');
+                        return;
+                      }
+
+                      setModalState(() { isSaving = true; errorText = null; });
+                      try {
+                        if (itemId.isNotEmpty) {
+                          await ApiService().updateProduct(itemId, {
+                            'name': name,
+                            'selling_price': price,
+                            'quantity': qty,
+                            'category': categoryCtrl.text.trim(),
+                          });
+                        } else {
+                          await ApiService().addProduct(
+                            name: name, price: price, quantity: qty,
+                            category: categoryCtrl.text.trim(),
+                          );
+                        }
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        _refresh();
+                      } catch (e) {
+                        setModalState(() { isSaving = false; errorText = '$e'; });
+                      }
+                    },
+                    child: isSaving
+                        ? const SizedBox(
+                            width: 22, height: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.2, color: Colors.white,
+                            ),
+                          )
+                        : Text(itemId.isNotEmpty ? 'Save Changes' : 'Create'),
+                  ),
+                ),
+              ],
+            ),
+          );
+        });
       },
     );
   }
@@ -493,33 +624,6 @@ class _ProductCard extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _DetailRow extends StatelessWidget {
-  const _DetailRow({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label,
-            style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 14),
-          ),
-          Text(value,
-            style: const TextStyle(
-              color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
       ),
     );
   }
