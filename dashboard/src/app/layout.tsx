@@ -3,6 +3,7 @@ import "./globals.css";
 import { AuthProvider } from "@/components/AuthProvider";
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://ondcsuperseller.com"),
   title: "ONDC Super Seller — WhatsApp Inventory Manager for Sellers",
   description:
     "Manage seller inventory through WhatsApp voice notes, images, and text. Realtime dashboard with analytics, price intelligence, CSV tools, alerts, and catalog activity tracking.",

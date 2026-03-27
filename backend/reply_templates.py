@@ -31,6 +31,19 @@ TEMPLATES = {
         "VOICE_ERROR": "⚠️ We couldn't transcribe your voice note. Please send a text message instead.",
         "UNREGISTERED": "⚠️ Welcome! To create an ONDC catalog, please sign up through our Super Seller Dashboard and link your phone number first.",
         "FAQ": "ℹ️ {answer}",
+        "APPROVAL_REQUIRED": (
+            "🧐 I need your confirmation before updating the catalog.\n\n"
+            "{summary}\n\n"
+            "Reply with *CONFIRM* to apply this update or *CANCEL* to ignore it."
+        ),
+        "APPROVAL_CONFIRMED": "✅ Confirmed. {summary}",
+        "APPROVAL_CANCELLED": "❌ Cancelled. No catalog changes were made.",
+        "NO_PENDING_APPROVAL": "ℹ️ There is no pending catalog update to confirm right now.",
+        "DAILY_SUMMARY": (
+            "📦 *Daily Stock Summary*\n\n"
+            "{summary}\n\n"
+            "_Reply on WhatsApp anytime to update stock, prices, or products._"
+        ),
     },
     "hi": {
         "ADD": "✅ जोड़ा गया: {items}।\nआपके कैटलॉग में अब {count} आइटम हैं।",
@@ -57,6 +70,19 @@ TEMPLATES = {
         "VOICE_ERROR": "⚠️ हम आपका वॉइस नोट नहीं समझ पाए। कृपया टेक्स्ट मैसेज भेजें।",
         "UNREGISTERED": "⚠️ स्वागत है! ONDC कैटलॉग बनाने के लिए, पहले Super Seller Dashboard पर साइनअप करें और अपना फोन नंबर लिंक करें।",
         "FAQ": "ℹ️ {answer}",
+        "APPROVAL_REQUIRED": (
+            "🧐 कैटलॉग अपडेट करने से पहले आपकी पुष्टि चाहिए।\n\n"
+            "{summary}\n\n"
+            "अपडेट लागू करने के लिए *CONFIRM* और अनदेखा करने के लिए *CANCEL* भेजें।"
+        ),
+        "APPROVAL_CONFIRMED": "✅ पुष्टि हो गई। {summary}",
+        "APPROVAL_CANCELLED": "❌ रद्द कर दिया गया। कैटलॉग में कोई बदलाव नहीं किया गया।",
+        "NO_PENDING_APPROVAL": "ℹ️ अभी पुष्टि करने के लिए कोई पेंडिंग कैटलॉग अपडेट नहीं है।",
+        "DAILY_SUMMARY": (
+            "📦 *रोज़ाना स्टॉक सारांश*\n\n"
+            "{summary}\n\n"
+            "_स्टॉक, कीमत या प्रोडक्ट अपडेट करने के लिए कभी भी WhatsApp पर जवाब दें।_"
+        ),
     },
     # --- Stub templates for future languages (fall back to English) ---
     "ta": {},

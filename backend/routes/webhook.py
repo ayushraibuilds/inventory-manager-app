@@ -19,10 +19,301 @@ from db import (
     get_catalog,
     save_catalog,
     log_activity,
+    create_pending_approval,
+    get_latest_pending_approval,
+    resolve_pending_approval,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["webhook"])
+
+APPROVAL_CONFIRM_WORDS = {"confirm", "approved", "approve", "yes", "haan", "ha", "ok", "okay"}
+APPROVAL_CANCEL_WORDS = {"cancel", "no", "nahi", "nahin", "reject", "ignore", "stop"}
+
+
+def _normalize_whatsapp_text(text: str) -> str:
+    return " ".join((text or "").strip().lower().split())
+
+
+def _get_approval_decision(text: str) -> Optional[str]:
+    normalized = _normalize_whatsapp_text(text)
+    if normalized in APPROVAL_CONFIRM_WORDS:
+        return "confirmed"
+    if normalized in APPROVAL_CANCEL_WORDS:
+        return "cancelled"
+    return None
+
+
+def _format_item_bullets(items: list[dict]) -> str:
+    if not items:
+        return "• No items extracted"
+
+    bullets = []
+    for item in items[:5]:
+        name = str(item.get("name", "Unknown")).strip() or "Unknown"
+        price = str(item.get("price_inr", "0") or "0")
+        quantity = item.get("quantity", 1)
+        unit = str(item.get("unit", "piece") or "piece")
+        bullets.append(f"• {name} (₹{price} x {quantity} {unit})")
+    return "\n".join(bullets)
+
+
+def _assess_image_confidence(items: list[dict]) -> tuple[bool, str]:
+    if not items:
+        return True, "I could not confidently extract any products from the image."
+
+    weak_signals = 0
+    for item in items:
+        name = str(item.get("name", "") or "").strip().lower()
+        if not name or name == "unknown":
+            weak_signals += 2
+        try:
+            price = float(item.get("price_inr", 0) or 0)
+        except (TypeError, ValueError):
+            price = 0
+        if price <= 0:
+            weak_signals += 1
+        try:
+            quantity = int(item.get("quantity", 1) or 1)
+        except (TypeError, ValueError):
+            quantity = 0
+        if quantity <= 0:
+            weak_signals += 1
+
+    if weak_signals >= max(2, len(items)):
+        return True, "Some extracted items are missing price or product details."
+    return False, ""
+
+
+def _assess_voice_confidence(transcript: str) -> tuple[bool, str]:
+    normalized = _normalize_whatsapp_text(transcript)
+    words = normalized.split()
+    uncertain_words = {"umm", "uh", "hmm", "maybe", "shayad", "kuch", "something"}
+    uncertain_count = sum(1 for word in words if word in uncertain_words)
+    if len(words) < 4:
+        return True, "The voice note transcript looks too short to apply automatically."
+    if uncertain_count >= 2:
+        return True, "The voice note transcript looks ambiguous."
+    return False, ""
+
+
+def _build_approval_summary(pending: dict) -> str:
+    source_type = pending.get("source_type", "update")
+    reason = pending.get("reason", "")
+    items = pending.get("items") or []
+    transcript = pending.get("transcript", "")
+
+    if source_type == "voice":
+        summary = f"Transcript:\n“{transcript or 'No transcript available'}”"
+    else:
+        summary = "Extracted items:\n" + _format_item_bullets(items)
+
+    if reason:
+        summary += f"\n\nReason: {reason}"
+    return summary
+
+
+def _merge_image_items_into_catalog(seller_id: str, items: list[dict]) -> tuple[bool, int]:
+    import uuid
+
+    existing_catalog = get_catalog(seller_id, service_role=True)
+    try:
+        existing_items = existing_catalog["bpp/catalog"]["bpp/providers"][0].get("items", [])
+    except (KeyError, IndexError):
+        existing_items = []
+
+    for item_data in items:
+        beckn_item = {
+            "id": str(uuid.uuid4()),
+            "category_id": item_data.get("category_id", "Grocery"),
+            "descriptor": {
+                "name": item_data["name"],
+                "short_desc": f"{item_data['quantity']} {item_data['unit']} of {item_data['name']}",
+            },
+            "price": {"currency": "INR", "value": str(item_data["price_inr"])},
+            "quantity": {"available": {"count": item_data["quantity"]}},
+            "unit": item_data["unit"],
+        }
+        existing_items.append(beckn_item)
+
+    assert_product_limit_or_raise(
+        seller_id,
+        len(existing_items),
+        None,
+        "image_catalog",
+    )
+
+    updated_catalog = {
+        "bpp/catalog": {
+            "bpp/providers": [
+                {
+                    "id": f"provider_{seller_id}",
+                    "descriptor": {"name": f"Super Seller: {seller_id}"},
+                    "items": existing_items,
+                }
+            ]
+        }
+    }
+    return save_catalog(seller_id, updated_catalog, service_role=True), len(existing_items)
+
+
+def _deliver_agent_reply(
+    result: dict,
+    seller_id: str,
+    extracted_phone: str,
+    raw_message: str,
+    detected_lang: str = "en",
+    token: str = None,
+):
+    lang = result.get("detected_language", detected_lang)
+    intent = result.get("intent", "UNKNOWN")
+    reply = ""
+
+    if intent == "ADD":
+        catalog = result.get("ondc_beckn_json", {})
+        try:
+            items = (
+                catalog.get("bpp/catalog", {})
+                .get("bpp/providers", [{}])[0]
+                .get("items", [])
+            )
+            item_count = len(items)
+            entities = result.get("extracted_product_entities")
+            if entities and hasattr(entities, "items") and len(entities.items) > 0:
+                names = [
+                    f"{e.name} (₹{e.price_inr} × {e.quantity_value} {e.unit})"
+                    for e in entities.items
+                ]
+                reply = format_reply(lang, "ADD", items=", ".join(names), count=item_count)
+
+                price_hints = []
+                for e in entities.items:
+                    try:
+                        suggestion = get_price_suggestion(e.name, float(e.price_inr), e.unit)
+                        if suggestion and suggestion.status != "competitive":
+                            price_hints.append(suggestion.suggestion)
+                    except (ValueError, TypeError):
+                        pass
+                if price_hints:
+                    reply += "\n" + "\n".join(price_hints)
+            else:
+                reply = format_reply(lang, "ADD_SIMPLE", count=item_count)
+        except Exception:
+            reply = format_reply(lang, "ADD_SIMPLE", count="?")
+        log_activity(seller_id, "ADD_VIA_WHATSAPP", raw_message, service_role=True)
+    elif intent == "UPDATE":
+        reply = format_reply(lang, "UPDATE")
+        log_activity(seller_id, "UPDATE_VIA_WHATSAPP", raw_message, service_role=True)
+    elif intent == "DELETE":
+        reply = format_reply(lang, "DELETE")
+        log_activity(seller_id, "DELETE_VIA_WHATSAPP", raw_message, service_role=True)
+    elif intent == "FAQ":
+        faq_answer = result.get("faq_answer", "")
+        reply = format_reply(lang, "FAQ", answer=faq_answer) if faq_answer else format_reply(lang, "UNKNOWN")
+        log_activity(seller_id, "FAQ_VIA_WHATSAPP", raw_message, service_role=True)
+    else:
+        reply = format_reply(lang, "UNKNOWN")
+        log_activity(seller_id, "UNKNOWN_INTENT", raw_message, service_role=True)
+
+    sent = send_whatsapp_reply(f"whatsapp:{extracted_phone}", reply)
+    log_activity(
+        seller_id,
+        "WHATSAPP_SENT" if sent else "WHATSAPP_SEND_FAILED",
+        item_name="",
+        details=reply[:500],
+        jwt_token=token,
+        service_role=True,
+    )
+
+
+async def process_pending_approval_background(
+    pending: dict,
+    seller_id: str,
+    extracted_phone: str,
+    detected_lang: str = "en",
+    token: str = None,
+):
+    approval_id = pending.get("approval_id", "")
+    source_type = pending.get("source_type", "")
+    if not approval_id:
+        send_whatsapp_reply(
+            f"whatsapp:{extracted_phone}",
+            format_reply(detected_lang, "NO_PENDING_APPROVAL"),
+        )
+        return
+
+    try:
+        if source_type == "voice":
+            transcript = pending.get("transcript", "")
+            history = get_conversation_history(seller_id, 3, None)
+            result = await asyncio.to_thread(
+                process_whatsapp_message,
+                transcript,
+                seller_id,
+                history,
+            )
+            resolve_pending_approval(
+                seller_id,
+                approval_id,
+                "confirmed",
+                details={"source_type": source_type},
+                service_role=True,
+            )
+            confirmed = format_reply(
+                detected_lang,
+                "APPROVAL_CONFIRMED",
+                summary="Applying your approved voice note now.",
+            )
+            send_whatsapp_reply(f"whatsapp:{extracted_phone}", confirmed)
+            _deliver_agent_reply(
+                result,
+                seller_id,
+                extracted_phone,
+                transcript,
+                detected_lang,
+                token,
+            )
+            return
+
+        items = pending.get("items") or []
+        saved, total_count = await asyncio.to_thread(_merge_image_items_into_catalog, seller_id, items)
+        if not saved:
+            raise RuntimeError("CATALOG_SAVE_ERROR")
+
+        resolve_pending_approval(
+            seller_id,
+            approval_id,
+            "confirmed",
+            details={"source_type": source_type, "item_count": len(items)},
+            service_role=True,
+        )
+        log_activity(
+            seller_id,
+            "IMAGE_CATALOG",
+            details=f"{len(items)} items confirmed from image",
+            service_role=True,
+        )
+        reply = format_reply(
+            detected_lang,
+            "APPROVAL_CONFIRMED",
+            summary=(
+                f"Added {len(items)} extracted items.\n"
+                f"{_format_item_bullets(items)}\n\nYour catalog now has {total_count} items."
+            ),
+        )
+        sent = send_whatsapp_reply(f"whatsapp:{extracted_phone}", reply)
+        log_activity(
+            seller_id,
+            "WHATSAPP_SENT" if sent else "WHATSAPP_SEND_FAILED",
+            details=reply[:500],
+            jwt_token=token,
+            service_role=True,
+        )
+    except BillingError as e:
+        send_whatsapp_reply(f"whatsapp:{extracted_phone}", e.message)
+    except Exception as e:
+        logger.error(f"Pending approval processing error: {e}")
+        send_whatsapp_reply(f"whatsapp:{extracted_phone}", format_reply(detected_lang, "ERROR"))
 
 
 @router.post("/whatsapp-webhook")
@@ -94,11 +385,13 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
 
     # --- Voice Note / Image Interception ---
     image_media_url = None
+    was_voice_note = False
     try:
         num_media = int(form_dict.get("NumMedia", 0))
         if num_media > 0:
             content_type = form_dict.get("MediaContentType0", "")
             if content_type.startswith("audio/"):
+                was_voice_note = True
                 await asyncio.to_thread(assert_media_feature_or_raise, seller_id, "audio", None)
                 media_url = form_dict.get("MediaUrl0")
                 if media_url:
@@ -162,6 +455,39 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
         True,
     )
 
+    approval_decision = _get_approval_decision(raw_message)
+    if approval_decision:
+        pending = await asyncio.to_thread(get_latest_pending_approval, seller_id, None, True)
+        if not pending:
+            reply = format_reply(detected_lang, "NO_PENDING_APPROVAL")
+            await asyncio.to_thread(send_whatsapp_reply, f"whatsapp:{extracted_phone}", reply)
+            return {"status": "no_pending_approval"}
+        if approval_decision == "cancelled":
+            await asyncio.to_thread(
+                resolve_pending_approval,
+                seller_id,
+                pending["approval_id"],
+                "cancelled",
+                {"source_type": pending.get("source_type", "")},
+                None,
+                True,
+            )
+            reply = format_reply(detected_lang, "APPROVAL_CANCELLED")
+            await asyncio.to_thread(send_whatsapp_reply, f"whatsapp:{extracted_phone}", reply)
+            return {"status": "approval_cancelled"}
+
+        ack = format_reply(detected_lang, "RECEIVED")
+        await asyncio.to_thread(send_whatsapp_reply, f"whatsapp:{extracted_phone}", ack)
+        background_tasks.add_task(
+            process_pending_approval_background,
+            pending,
+            seller_id,
+            extracted_phone,
+            detected_lang,
+            token,
+        )
+        return {"status": "approval_processing"}
+
     # --- Fetch conversation memory ---
     conversation_history = await asyncio.to_thread(get_conversation_history, seller_id, 3, None)
 
@@ -202,49 +528,47 @@ async def process_webhook_background(
         try:
             from image_processor import process_product_image
             items = await asyncio.to_thread(process_product_image, image_media_url, detected_lang)
-            if items:
-                # Build catalog entries and merge into seller's catalog
-                import uuid
-                existing_catalog = get_catalog(seller_id, service_role=True)
-                try:
-                    existing_items = existing_catalog["bpp/catalog"]["bpp/providers"][0].get("items", [])
-                except (KeyError, IndexError):
-                    existing_items = []
-
-                for item_data in items:
-                    beckn_item = {
-                        "id": str(uuid.uuid4()),
-                        "category_id": item_data.get("category_id", "Grocery"),
-                        "descriptor": {"name": item_data["name"], "short_desc": f"{item_data['quantity']} {item_data['unit']} of {item_data['name']}"},
-                        "price": {"currency": "INR", "value": str(item_data["price_inr"])},
-                        "quantity": {"available": {"count": item_data["quantity"]}},
-                        "unit": item_data["unit"],
-                    }
-                    existing_items.append(beckn_item)
-
-                await asyncio.to_thread(
-                    assert_product_limit_or_raise,
+            low_confidence, reason = _assess_image_confidence(items)
+            if low_confidence:
+                pending = await asyncio.to_thread(
+                    create_pending_approval,
                     seller_id,
-                    len(existing_items),
+                    "image",
+                    {
+                        "items": items,
+                        "reason": reason,
+                        "raw_message": raw_message[:500],
+                    },
                     None,
-                    "image_catalog",
+                    True,
                 )
-
-                updated_catalog = {
-                    "bpp/catalog": {"bpp/providers": [{"id": f"provider_{seller_id}", "descriptor": {"name": f"Super Seller: {seller_id}"}, "items": existing_items}]}
-                }
-                saved = save_catalog(seller_id, updated_catalog, service_role=True)
-                if not saved:
-                    raise RuntimeError("CATALOG_SAVE_ERROR")
-
-                names = [f"{i['name']} (₹{i['price_inr']})" for i in items]
-                reply = f"📷 Extracted {len(items)} items from your photo:\n" + "\n".join(f"• {n}" for n in names)
-                reply += f"\n\nYour catalog now has {len(existing_items)} items."
-                log_activity(seller_id, "IMAGE_CATALOG", details=f"{len(items)} items from image", service_role=True)
+                reply = format_reply(
+                    detected_lang,
+                    "APPROVAL_REQUIRED",
+                    summary=_build_approval_summary(pending),
+                )
                 sent = send_whatsapp_reply(f"whatsapp:{extracted_phone}", reply)
-                log_action = "WHATSAPP_SENT" if sent else "WHATSAPP_SEND_FAILED"
-                log_activity(seller_id, log_action, details=reply[:500], jwt_token=token, service_role=True)
+                log_activity(
+                    seller_id,
+                    "WHATSAPP_SENT" if sent else "WHATSAPP_SEND_FAILED",
+                    details=reply[:500],
+                    jwt_token=token,
+                    service_role=True,
+                )
                 return
+
+            saved, total_count = await asyncio.to_thread(_merge_image_items_into_catalog, seller_id, items)
+            if not saved:
+                raise RuntimeError("CATALOG_SAVE_ERROR")
+
+            names = [f"{i['name']} (₹{i['price_inr']})" for i in items]
+            reply = f"📷 Extracted {len(items)} items from your photo:\n" + "\n".join(f"• {n}" for n in names)
+            reply += f"\n\nYour catalog now has {total_count} items."
+            log_activity(seller_id, "IMAGE_CATALOG", details=f"{len(items)} items from image", service_role=True)
+            sent = send_whatsapp_reply(f"whatsapp:{extracted_phone}", reply)
+            log_action = "WHATSAPP_SENT" if sent else "WHATSAPP_SEND_FAILED"
+            log_activity(seller_id, log_action, details=reply[:500], jwt_token=token, service_role=True)
+            return
         except Exception as e:
             logger.error(f"Image Processing Error: {e}")
             reply = format_reply(detected_lang, "ERROR")
@@ -252,6 +576,34 @@ async def process_webhook_background(
             return
 
     # --- Standard text/voice processing path ---
+    low_confidence_voice, voice_reason = _assess_voice_confidence(raw_message)
+    if was_voice_note and voice_reason and low_confidence_voice:
+        pending = await asyncio.to_thread(
+            create_pending_approval,
+            seller_id,
+            "voice",
+            {
+                "transcript": raw_message[:500],
+                "reason": voice_reason,
+            },
+            None,
+            True,
+        )
+        reply = format_reply(
+            detected_lang,
+            "APPROVAL_REQUIRED",
+            summary=_build_approval_summary(pending),
+        )
+        sent = send_whatsapp_reply(f"whatsapp:{extracted_phone}", reply)
+        log_activity(
+            seller_id,
+            "WHATSAPP_SENT" if sent else "WHATSAPP_SEND_FAILED",
+            details=reply[:500],
+            jwt_token=token,
+            service_role=True,
+        )
+        return
+
     try:
         result = await asyncio.to_thread(
             process_whatsapp_message, raw_message, seller_id, conversation_history or []
@@ -266,68 +618,4 @@ async def process_webhook_background(
         reply = format_reply(detected_lang, "ERROR")
         send_whatsapp_reply(f"whatsapp:{extracted_phone}", reply)
         return
-
-    # Read language from agent result (may be more accurate than early detection)
-    lang = result.get("detected_language", detected_lang)
-    intent = result.get("intent", "UNKNOWN")
-    reply = ""
-
-    if intent == "ADD":
-        catalog = result.get("ondc_beckn_json", {})
-        try:
-            items = (
-                catalog.get("bpp/catalog", {})
-                .get("bpp/providers", [{}])[0]
-                .get("items", [])
-            )
-            item_count = len(items)
-            entities = result.get("extracted_product_entities")
-            if entities and hasattr(entities, "items") and len(entities.items) > 0:
-                names = [
-                    f"{e.name} (₹{e.price_inr} × {e.quantity_value} {e.unit})"
-                    for e in entities.items
-                ]
-                reply = format_reply(lang, "ADD", items=", ".join(names), count=item_count)
-
-                # --- Price intelligence hints ---
-                price_hints = []
-                for e in entities.items:
-                    try:
-                        suggestion = get_price_suggestion(e.name, float(e.price_inr), e.unit)
-                        if suggestion and suggestion.status != "competitive":
-                            price_hints.append(suggestion.suggestion)
-                    except (ValueError, TypeError):
-                        pass
-                if price_hints:
-                    reply += "\n" + "\n".join(price_hints)
-            else:
-                reply = format_reply(lang, "ADD_SIMPLE", count=item_count)
-        except Exception:
-            reply = format_reply(lang, "ADD_SIMPLE", count="?")
-        log_activity(seller_id, "ADD_VIA_WHATSAPP", raw_message, service_role=True)
-    elif intent == "UPDATE":
-        reply = format_reply(lang, "UPDATE")
-        log_activity(seller_id, "UPDATE_VIA_WHATSAPP", raw_message, service_role=True)
-    elif intent == "DELETE":
-        reply = format_reply(lang, "DELETE")
-        log_activity(seller_id, "DELETE_VIA_WHATSAPP", raw_message, service_role=True)
-    elif intent == "FAQ":
-        faq_answer = result.get("faq_answer", "")
-        reply = format_reply(lang, "FAQ", answer=faq_answer) if faq_answer else format_reply(lang, "UNKNOWN")
-        log_activity(seller_id, "FAQ_VIA_WHATSAPP", raw_message, service_role=True)
-    else:
-        reply = format_reply(lang, "UNKNOWN")
-        log_activity(seller_id, "UNKNOWN_INTENT", raw_message, service_role=True)
-
-    # Send reply
-    sent = send_whatsapp_reply(f"whatsapp:{extracted_phone}", reply)
-
-    # --- Audit Trail: Log outgoing reply ---
-    log_activity(
-        seller_id,
-        "WHATSAPP_SENT" if sent else "WHATSAPP_SEND_FAILED",
-        item_name="",
-        details=reply[:500],
-        jwt_token=token,
-        service_role=True,
-    )
+    _deliver_agent_reply(result, seller_id, extracted_phone, raw_message, detected_lang, token)

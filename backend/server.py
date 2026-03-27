@@ -133,6 +133,11 @@ from routes.ondc import router as ondc_router
 from routes.images import router as images_router
 from routes.billing import router as billing_router, v1_router as billing_v1_router
 
+@app.get("/health", tags=["system"])
+async def health_check():
+    """Simple health check endpoint for monitoring."""
+    return {"status": "ok", "service": "ondc-super-seller"}
+
 # Backward-compatible /api/* paths
 app.include_router(webhook_router)
 app.include_router(catalog_router)

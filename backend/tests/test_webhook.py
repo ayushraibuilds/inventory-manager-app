@@ -1,7 +1,9 @@
 """Tests for webhook endpoint processing (mocked — no real Twilio/Groq calls)."""
+import asyncio
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
+from types import SimpleNamespace
 
 
 class TestWebhookEndpoint:
@@ -98,3 +100,98 @@ class TestProcessWebhookBackground:
         assert "raw_message" in param_names
         assert "seller_id" in param_names
         assert "extracted_phone" in param_names
+
+    def test_low_confidence_image_creates_pending_approval(self):
+        from routes.webhook import process_webhook_background
+
+        weak_items = [
+            {
+                "name": "Unknown",
+                "price_inr": "0",
+                "quantity": 1,
+                "unit": "piece",
+                "category_id": "Grocery",
+            }
+        ]
+
+        with patch("image_processor.process_product_image", return_value=weak_items), \
+             patch("routes.webhook.create_pending_approval", return_value={"approval_id": "ap-1", "source_type": "image", "items": weak_items, "reason": "missing details"}), \
+             patch("routes.webhook.send_whatsapp_reply", return_value=True) as mock_reply, \
+             patch("routes.webhook.log_activity"), \
+             patch("routes.webhook.save_catalog") as mock_save:
+            asyncio.run(
+                process_webhook_background(
+                    raw_message="",
+                    seller_id="seller-123",
+                    extracted_phone="+919876543210",
+                    detected_lang="en",
+                    conversation_history=[],
+                    image_media_url="https://example.com/test.jpg",
+                    token=None,
+                )
+            )
+
+        mock_save.assert_not_called()
+        assert mock_reply.called
+        assert "CONFIRM" in mock_reply.call_args.args[1]
+
+    def test_pending_voice_approval_processes_after_confirm(self):
+        from routes.webhook import process_pending_approval_background
+
+        result = {
+            "intent": "ADD",
+            "detected_language": "en",
+            "ondc_beckn_json": {
+                "bpp/catalog": {
+                    "bpp/providers": [
+                        {"items": [{"id": "1"}, {"id": "2"}]}
+                    ]
+                }
+            },
+            "extracted_product_entities": SimpleNamespace(
+                items=[
+                    SimpleNamespace(name="Rice", price_inr="50", quantity_value=2, unit="kg")
+                ]
+            ),
+        }
+
+        with patch("routes.webhook.get_conversation_history", return_value=[]), \
+             patch("routes.webhook.process_whatsapp_message", return_value=result), \
+             patch("routes.webhook.resolve_pending_approval") as mock_resolve, \
+             patch("routes.webhook.send_whatsapp_reply", return_value=True) as mock_reply, \
+             patch("routes.webhook.log_activity"), \
+             patch("routes.webhook.get_price_suggestion", return_value=None):
+            asyncio.run(
+                process_pending_approval_background(
+                    {"approval_id": "ap-1", "source_type": "voice", "transcript": "add 2 kg rice at 50"},
+                    "seller-123",
+                    "+919876543210",
+                    "en",
+                    None,
+                )
+            )
+
+        mock_resolve.assert_called_once()
+        assert mock_reply.call_count >= 2
+
+    
+    @patch("routes.webhook.verify_twilio_signature", return_value=True)
+    def test_webhook_cancel_pending_approval(self, mock_sig):
+        from server import app
+
+        client = TestClient(app)
+        with patch("routes.webhook.get_seller_id_by_phone", return_value="seller-123"), \
+             patch("routes.webhook.get_seller_profile", return_value={"store_name": "Test Store"}), \
+             patch("routes.webhook.is_rate_limited", return_value=False), \
+             patch("routes.webhook.log_activity"), \
+             patch("routes.webhook.get_latest_pending_approval", return_value={"approval_id": "ap-1", "source_type": "image"}), \
+             patch("routes.webhook.resolve_pending_approval") as mock_resolve, \
+             patch("routes.webhook.send_whatsapp_reply", return_value=True) as mock_reply:
+            res = client.post("/whatsapp-webhook", data={
+                "From": "whatsapp:+919876543210",
+                "Body": "cancel",
+            })
+
+        assert res.status_code == 200
+        mock_resolve.assert_called_once()
+        assert "Cancelled" in mock_reply.call_args.args[1]

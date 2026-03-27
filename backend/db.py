@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta
 from supabase import create_client, Client, ClientOptions
 from env_utils import get_merged_env
@@ -273,6 +274,116 @@ def get_conversation_history(seller_id: str, limit: int = 3, jwt_token: str = No
     except Exception as e:
         logger.error(f"get_conversation_history error: {e}")
         return []
+
+
+def create_pending_approval(
+    seller_id: str,
+    source_type: str,
+    details: dict,
+    jwt_token: str = None,
+    service_role: bool = False,
+) -> dict:
+    approval_id = str(uuid.uuid4())
+    payload = {
+        "approval_id": approval_id,
+        "source_type": source_type,
+        "status": "pending",
+        **details,
+    }
+    log_activity(
+        seller_id,
+        "PENDING_APPROVAL_CREATED",
+        item_name=approval_id,
+        details=json.dumps(payload, separators=(",", ":")),
+        jwt_token=jwt_token,
+        service_role=service_role,
+    )
+    return payload
+
+
+def get_latest_pending_approval(
+    seller_id: str,
+    jwt_token: str = None,
+    service_role: bool = False,
+) -> dict | None:
+    sb = get_supabase_client(jwt_token, use_service_role=service_role)
+    try:
+        response = (
+            sb.table("activity_log")
+            .select("id, item_name, details")
+            .eq("seller_id", seller_id)
+            .eq("action", "PENDING_APPROVAL_CREATED")
+            .order("id", desc=True)
+            .limit(10)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"get_latest_pending_approval fetch error: {e}")
+        return None
+
+    for row in response.data or []:
+        approval_id = row.get("item_name", "")
+        if not approval_id:
+            continue
+
+        try:
+            payload = json.loads(row.get("details", "") or "{}")
+        except json.JSONDecodeError:
+            logger.warning("Skipping malformed pending approval payload")
+            continue
+
+        try:
+            resolution = (
+                sb.table("activity_log")
+                .select("id")
+                .eq("seller_id", seller_id)
+                .eq("item_name", approval_id)
+                .in_("action", ["PENDING_APPROVAL_CONFIRMED", "PENDING_APPROVAL_CANCELLED"])
+                .limit(1)
+                .execute()
+            )
+        except Exception as e:
+            logger.error(f"get_latest_pending_approval resolution error: {e}")
+            return None
+
+        if resolution.data:
+            continue
+
+        payload.setdefault("approval_id", approval_id)
+        payload.setdefault("status", "pending")
+        return payload
+
+    return None
+
+
+def resolve_pending_approval(
+    seller_id: str,
+    approval_id: str,
+    resolution: str,
+    details: dict | None = None,
+    jwt_token: str = None,
+    service_role: bool = False,
+):
+    if resolution not in {"confirmed", "cancelled"}:
+        raise ValueError("resolution must be 'confirmed' or 'cancelled'")
+
+    payload = {"approval_id": approval_id, "status": resolution}
+    if details:
+        payload.update(details)
+
+    action = (
+        "PENDING_APPROVAL_CONFIRMED"
+        if resolution == "confirmed"
+        else "PENDING_APPROVAL_CANCELLED"
+    )
+    log_activity(
+        seller_id,
+        action,
+        item_name=approval_id,
+        details=json.dumps(payload, separators=(",", ":")),
+        jwt_token=jwt_token,
+        service_role=service_role,
+    )
 
 
 # --- Seller Profiles ---

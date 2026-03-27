@@ -73,6 +73,16 @@ class TestFormatReply:
         reply = format_reply("hi", "ONBOARDING")
         assert "स्वागत" in reply
 
+    def test_approval_required_english(self):
+        reply = format_reply("en", "APPROVAL_REQUIRED", summary="• Rice (₹50 x 2 kg)")
+        assert "CONFIRM" in reply
+        assert "Rice" in reply
+
+    def test_daily_summary_hindi(self):
+        reply = format_reply("hi", "DAILY_SUMMARY", summary="Total products: 5")
+        assert "स्टॉक" in reply
+        assert "5" in reply
+
 
 class TestFaqAnswers:
     """Tests for get_faq_answer()."""

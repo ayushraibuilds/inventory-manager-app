@@ -1004,3 +1004,44 @@ v1_router.delete("/catalog/item/{item_id}", dependencies=[Depends(verify_api_key
 v1_router.post("/catalog/bulk-delete", dependencies=[Depends(verify_api_key)])(bulk_delete_items)
 v1_router.post("/catalog/import", dependencies=[Depends(verify_api_key)])(import_catalog)
 v1_router.post("/catalog/import/csv", dependencies=[Depends(verify_api_key)])(import_csv)
+
+
+# ─── AI Agent Chat ───────────────────────────────────────────────────────────
+class AgentChatRequest(BaseModel):
+    message: str
+    seller_id: Optional[str] = None
+
+
+@router.post("/api/agent/chat", dependencies=[Depends(require_authenticated_request)])
+async def agent_chat(request: Request, data: AgentChatRequest, token: str = Depends(get_jwt_token)):
+    """Process a natural-language command through the AI agent (for mobile/dashboard chat)."""
+    from agent import process_whatsapp_message
+
+    seller_id = data.seller_id
+    if not seller_id and token:
+        try:
+            from routes.auth import decode_jwt_seller_id
+            seller_id = decode_jwt_seller_id(token)
+        except Exception:
+            seller_id = "unknown_seller"
+
+    result = process_whatsapp_message(
+        message=data.message,
+        seller_id=seller_id or "unknown_seller",
+    )
+
+    # Extract a human-readable response from the agent state
+    reply = result.get("reply") or result.get("response_message") or result.get("beckn_catalog_text", "")
+    if not reply:
+        # Look in items_parsed for a summary
+        items = result.get("items_parsed", [])
+        if items:
+            names = [item.get("name", "item") for item in items if isinstance(item, dict)]
+            reply = f"Processed {len(names)} item(s): {', '.join(names)}."
+        else:
+            reply = "Command processed. Check your catalog for updates."
+
+    return {"response": reply, "state": {k: str(v)[:200] for k, v in result.items()}}
+
+
+v1_router.post("/agent/chat", dependencies=[Depends(require_authenticated_request)])(agent_chat)
