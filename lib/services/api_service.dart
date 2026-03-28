@@ -19,7 +19,6 @@ class ApiService {
   }
 
   Future<dynamic> getOrders() async {
-    // Handle offline mode and real backend endpoints
     final headers = await _getHeaders();
     final response = await http.get(Uri.parse('$baseUrl/orders'), headers: headers);
     
@@ -30,5 +29,29 @@ class ApiService {
     }
   }
 
-  // Real API methods
+  Future<dynamic> getProducts() async {
+    final headers = await _getHeaders();
+    final response = await http.get(Uri.parse('$baseUrl/products'), headers: headers);
+    
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Failed to load products: ${response.statusCode}');
+    }
+  }
+
+  Future<dynamic> addCatalogItem(Map<String, dynamic> item) async {
+    final headers = await _getHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/products'), 
+      headers: headers,
+      body: json.encode(item)
+    );
+    
+    if (response.statusCode == 201 || response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Failed to add product: ${response.statusCode}');
+    }
+  }
 }

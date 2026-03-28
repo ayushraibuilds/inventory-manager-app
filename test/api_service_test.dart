@@ -3,10 +3,16 @@ import 'package:ondc_seller_app/services/api_service.dart';
 
 void main() {
   group('ApiService Tests', () {
-    test('Orders API returns mapped data structure', () async {
-      final service = ApiService();
-      // Add integration/mock logic here
-      expect(service, isNotNull);
+    late ApiService apiService;
+
+    setUp(() {
+      apiService = ApiService();
     });
+
+    test('ApiService generates correct base URL', () {
+      expect(ApiService.baseUrl, equals('https://api.ondcsuperseller.com/v1'));
+    });
+    
+    // We would mock HTTP calls here using mockito for a full test suite
   });
 }
