@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -176,44 +178,49 @@ class _MainWrapperState extends State<MainWrapper> {
           ),
         ],
       ),
-      bottomNavigationBar: DecoratedBox(
-        decoration: const BoxDecoration(
-          color: Color(0xFF111827),
-          border: Border(top: BorderSide(color: Color(0xFF1E293B))),
-        ),
-        child: BottomNavigationBar(
-          currentIndex: _currentIndex,
-          onTap: (index) => setState(() {
-            _currentIndex = index;
-            _visitedTabs.add(index);
-          }),
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          selectedItemColor: _primaryBlue,
-          unselectedItemColor: const Color(0xFF64748B),
-          type: BottomNavigationBarType.fixed,
-          items: const [
-            BottomNavigationBarItem(
-              icon: Icon(Icons.query_stats_rounded),
-              label: 'Pulse',
+      bottomNavigationBar: ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          child: DecoratedBox(
+            decoration: const BoxDecoration(
+              color: Color(0x66111827),
+              border: Border(top: BorderSide(color: Color(0x441E293B))),
             ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.inventory_2_rounded),
-              label: 'Products',
+            child: BottomNavigationBar(
+              currentIndex: _currentIndex,
+              onTap: (index) => setState(() {
+                _currentIndex = index;
+                _visitedTabs.add(index);
+              }),
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              selectedItemColor: _primaryBlue,
+              unselectedItemColor: const Color(0xFF64748B),
+              type: BottomNavigationBarType.fixed,
+              items: const [
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.query_stats_rounded),
+                  label: 'Pulse',
+                ),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.inventory_2_rounded),
+                  label: 'Products',
+                ),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.qr_code_scanner_rounded),
+                  label: 'Scanner',
+                ),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.auto_awesome_rounded),
+                  label: 'AI Chat',
+                ),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.history_rounded),
+                  label: 'Activity',
+                ),
+              ],
             ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.qr_code_scanner_rounded),
-              label: 'Scanner',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.auto_awesome_rounded),
-              label: 'AI Chat',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.history_rounded),
-              label: 'Activity',
-            ),
-          ],
+          ),
         ),
       ),
     );
